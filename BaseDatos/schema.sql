@@ -1,0 +1,66 @@
+-- Tabla de Usuarios --
+CREATE TABLE IF NOT EXISTS Usuarios (
+    IdUsuario INTEGER PRIMARY KEY AUTOINCREMENT,
+    Nombres TEXT NOT NULL,
+    Correo TEXT NOT NULL UNIQUE,
+    PasswordHash TEXT NOT NULL,
+    Rol TEXT NOT NULL DEFAULT 'Usuario',
+    Activo INTEGER NOT NULL DEFAULT 1
+);
+
+-- Tabla de Salas --
+CREATE TABLE IF NOT EXISTS Salas (
+    IdSala INTEGER PRIMARY KEY AUTOINCREMENT,
+    CodigoSala TEXT NOT NULL UNIQUE,
+    Nombre TEXT NOT NULL,
+    IdHost INTEGER NOT NULL,
+    Estado TEXT NOT NULL DEFAULT 'Activa',
+    FechaCreacion DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (IdHost) REFERENCES Usuarios(IdUsuario) ON DELETE CASCADE
+);
+
+-- Tabla de Participantes en Sala --
+CREATE TABLE IF NOT EXISTS ParticipantesSala (
+    IdParticipante INTEGER PRIMARY KEY AUTOINCREMENT,
+    IdSala INTEGER NOT NULL,
+    IdUsuario INTEGER NOT NULL,
+    Estado TEXT NOT NULL, -- 'Host' o 'Aceptado'
+    FechaIngreso DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (IdSala) REFERENCES Salas(IdSala) ON DELETE CASCADE,
+    FOREIGN KEY (IdUsuario) REFERENCES Usuarios(IdUsuario) ON DELETE CASCADE,
+    UNIQUE(IdSala, IdUsuario) 
+);
+
+-- Tabla de Solicitudes Ingreso --
+CREATE TABLE IF NOT EXISTS SolicitudesSala (
+    IdSolicitud INTEGER PRIMARY KEY AUTOINCREMENT,
+    IdSala INTEGER NOT NULL,
+    IdUsuario INTEGER NOT NULL,
+    Estado TEXT NOT NULL DEFAULT 'Pendiente',
+    FechaSolicitud DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (IdSala) REFERENCES Salas(IdSala) ON DELETE CASCADE,
+    FOREIGN KEY (IdUsuario) REFERENCES Usuarios(IdUsuario) ON DELETE CASCADE
+);
+
+-- Tabla de Mensajes --
+CREATE TABLE IF NOT EXISTS Mensajes (
+    IdMensaje INTEGER PRIMARY KEY AUTOINCREMENT,
+    IdSala INTEGER NOT NULL,
+    IdUsuario INTEGER NOT NULL,
+    Contenido TEXT NOT NULL,
+    FechaEnvio DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (IdSala) REFERENCES Salas(IdSala) ON DELETE CASCADE,
+    FOREIGN KEY (IdUsuario) REFERENCES Usuarios(IdUsuario) ON DELETE CASCADE
+);
+
+-- Tabla de Archivos Compartidos --
+CREATE TABLE IF NOT EXISTS ArchivosCompartidos (
+    IdArchivo INTEGER PRIMARY KEY AUTOINCREMENT,
+    IdSala INTEGER NOT NULL,
+    IdUsuario INTEGER NOT NULL,
+    NombreArchivo TEXT NOT NULL,
+    RutaArchivo TEXT NOT NULL,
+    FechaEnvio DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (IdSala) REFERENCES Salas(IdSala) ON DELETE CASCADE,
+    FOREIGN KEY (IdUsuario) REFERENCES Usuarios(IdUsuario) ON DELETE CASCADE
+);
