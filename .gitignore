@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+ENV/
+
+# Database
+*.db
+*.db-journal
+
+# Node
+node_modules/
+npm-debug.log*
