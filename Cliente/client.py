@@ -7,17 +7,10 @@ import time
 import os
 import tkinter as tk
 from tkinter import messagebox
-
-try:
-    import customtkinter as ctk
-except ImportError:
-    print("Instalando customtkinter automáticamente...")
-    os.system("python -m pip install customtkinter")
-    import customtkinter as ctk
+import customtkinter as ctk
 
 DEFAULT_HOST = 'localhost'
 DEFAULT_PORT = 8080
-
 ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("blue")
 
