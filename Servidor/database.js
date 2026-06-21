@@ -72,9 +72,42 @@ function createUser(nombres, correo, password, rol = 'Usuario') {
     }
 }
 
+function crearSala(codigoSala, nombre, idHost) {
+    const stmt = db.prepare(`INSERT INTO Salas (CodigoSala, Nombre, IdHost, Estado) VALUES (?, ?, ?, 'Activa')`);
+    try {
+        const res = stmt.run(codigoSala, nombre, idHost);
+        return { success: true, idSala: res.lastInsertRowid }; 
+    } catch (err) {
+        return { success: false, error: err.message };
+    }
+}
+
+function obtenerSalaPorCodigo(codigoSala) {
+    const stmt = db.prepare(`SELECT IdSala, IdHost FROM Salas WHERE CodigoSala = ? AND Estado = 'Activa'`);
+    try {
+        const row = stmt.get(codigoSala);
+        return { success: true, sala: row }; 
+    } catch (err) {
+        return { success: false, error: err.message };
+    }
+}
+
+function registrarSolicitud(idSala, idUsuario) {
+    const stmt = db.prepare(`INSERT INTO SolicitudesSala (IdSala, IdUsuario, Estado) VALUES (?, ?, 'Pendiente')`);
+    try {
+        const res = stmt.run(idSala, idUsuario);
+        return { success: true, idSolicitud: res.lastInsertRowid };
+    } catch (err) {
+        return { success: false, error: err.message };
+    }
+}
+
 module.exports = {
     hashPassword,
     verifyPassword,
     getUserByCorreo,
-    createUser
+    createUser, 
+    crearSala, 
+    obtenerSalaPorCodigo, 
+    registrarSolicitud
 };

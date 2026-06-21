@@ -359,6 +359,30 @@ class App(ctk.CTk):
                 messagebox.showerror("Error de Registro", json_msg['message'])
             if self.client:
                 self.client.disconnect()
+        
+        elif msg_type == 'CREATE_ROOM_RESPONSE':
+            if json_msg['success']:
+                messagebox.showinfo("Éxito", json_msg['message'])
+                self.show_host_panel(json_msg['codigoSala'], json_msg['nombreSala'])
+            else:
+                messagebox.showerror("Error", json_msg.get('message', 'Error al crear sala.'))
+                
+        elif msg_type == 'JOIN_ROOM_RESPONSE':
+            if json_msg['success']:
+                self.show_waiting_room_guest()
+            else:
+                messagebox.showerror("Error", json_msg.get('message', 'No se pudo ingresar.'))
+                
+        elif msg_type == 'WAITING_ROOM_UPDATE':
+            if hasattr(self, 'waiting_frame'):
+                self.update_waiting_list(json_msg.get('usuariosPendientes', []))
+                
+        elif msg_type == 'ADMIT_RESULT':
+            if json_msg['success']:
+                self.show_meeting_room(json_msg['codigoSala'])
+            else:
+                messagebox.showwarning("Acceso Denegado", json_msg.get('message', 'Has sido rechazado.'))
+                self.show_lobby_screen()
 
     def _clear_container(self):
         for widget in self.main_container.winfo_children():
@@ -368,6 +392,134 @@ class App(ctk.CTk):
         if self.client:
             self.client.disconnect()
         self.destroy()
+        
+    def show_lobby_screen(self):
+        self._clear_container()
+        
+        header = ctk.CTkFrame(self.main_container, height=60, corner_radius=8)
+        header.pack(fill="x", pady=(0, 10))
+        
+        lbl_welcome = ctk.CTkLabel(header, text=f"Bienvenido, {self.user_session['nombres']}", font=("Inter", 16, "bold"))
+        lbl_welcome.pack(side="left", padx=20, pady=15)
+        
+        btn_logout = ctk.CTkButton(header, text="Cerrar Sesión", width=100, height=30, fg_color="#e74c3c", hover_color="#c0392b", command=self.on_logout_click)
+        btn_logout.pack(side="right", padx=20, pady=15)
+        
+        content = ctk.CTkFrame(self.main_container, corner_radius=12)
+        content.pack(fill="both", expand=True, pady=10)
+
+        frame_create = ctk.CTkFrame(content, fg_color="transparent")
+        frame_create.pack(pady=20, padx=20, fill="x")
+        
+        ctk.CTkLabel(frame_create, text="Crear una Nueva Sala", font=("Inter", 16, "bold")).pack(anchor="w")
+        
+        self.entry_room_code = ctk.CTkEntry(frame_create, placeholder_text="Código de Sala Único (Ej: REUNION1)")
+        self.entry_room_code.pack(fill="x", pady=(10, 5))
+        
+        self.entry_room_name = ctk.CTkEntry(frame_create, placeholder_text="Nombre de la Sala")
+        self.entry_room_name.pack(fill="x", pady=5)
+        
+        btn_create = ctk.CTkButton(frame_create, text="Crear Sala", command=self.on_create_room)
+        btn_create.pack(pady=5, anchor="e")
+
+        ctk.CTkFrame(content, height=2, fg_color="gray30").pack(fill="x", padx=20) # Divisor
+
+        frame_join = ctk.CTkFrame(content, fg_color="transparent")
+        frame_join.pack(pady=20, padx=20, fill="x")
+        
+        ctk.CTkLabel(frame_join, text="Unirse a una Sala", font=("Inter", 16, "bold")).pack(anchor="w")
+        
+        self.entry_join_code = ctk.CTkEntry(frame_join, placeholder_text="Ingrese el Código de la Sala")
+        self.entry_join_code.pack(fill="x", pady=(10, 5))
+        
+        btn_join = ctk.CTkButton(frame_join, text="Solicitar Ingreso", command=self.on_join_room)
+        btn_join.pack(pady=5, anchor="e")
+
+    def on_create_room(self):
+        code = self.entry_room_code.get().strip()
+        name = self.entry_room_name.get().strip()
+        
+        if not code or not name:
+            messagebox.showerror("Error", "Debe proporcionar un código y un nombre para la sala.")
+            return
+            
+        self.client.send_message({
+            'type': 'CREATE_ROOM',
+            'codigoSala': code,
+            'nombre': name
+        })
+
+    def on_join_room(self):
+        code = self.entry_join_code.get().strip()
+        
+        if not code:
+            messagebox.showerror("Error", "Debe proporcionar el código de la sala.")
+            return
+            
+        self.client.send_message({
+            'type': 'JOIN_ROOM_REQUEST',
+            'codigoSala': code
+        })
+
+    def show_host_panel(self, room_code, room_name):
+        self._clear_container()
+        
+        header = ctk.CTkFrame(self.main_container, height=60, corner_radius=8)
+        header.pack(fill="x", pady=(0, 10))
+        
+        ctk.CTkLabel(header, text=f"Panel de Anfitrión - {room_name} ({room_code})", font=("Inter", 16, "bold")).pack(side="left", padx=20, pady=15)
+        
+        self.waiting_frame = ctk.CTkScrollableFrame(self.main_container, label_text="Sala de Espera (Pendientes)")
+        self.waiting_frame.pack(fill="both", expand=True, pady=10)
+        
+        self.current_room_code = room_code
+
+    def update_waiting_list(self, pending_users):
+        for widget in self.waiting_frame.winfo_children():
+            widget.destroy()
+            
+        if not pending_users:
+            ctk.CTkLabel(self.waiting_frame, text="No hay usuarios en espera.").pack(pady=10)
+            return
+
+        for user in pending_users:
+            user_frame = ctk.CTkFrame(self.waiting_frame)
+            user_frame.pack(fill="x", pady=5, padx=5)
+            
+            ctk.CTkLabel(user_frame, text=user['nombre']).pack(side="left", padx=10)
+            
+            btn_accept = ctk.CTkButton(user_frame, text="Admitir", width=80, fg_color="#2ecc71", hover_color="#27ae60", 
+                                     command=lambda u=user['id']: self.on_admit_user(u, True))
+            btn_accept.pack(side="right", padx=5, pady=5)
+            
+            btn_reject = ctk.CTkButton(user_frame, text="Rechazar", width=80, fg_color="#e74c3c", hover_color="#c0392b",
+                                     command=lambda u=user['id']: self.on_admit_user(u, False))
+            btn_reject.pack(side="right", padx=5, pady=5)
+
+    def on_admit_user(self, user_id, accept):
+        self.client.send_message({
+            'type': 'ADMIT_USER',
+            'codigoSala': self.current_room_code,
+            'userIdToAdmit': user_id,
+            'accept': accept
+        })
+
+    def show_waiting_room_guest(self):
+        self._clear_container()
+        
+        content = ctk.CTkFrame(self.main_container, corner_radius=12)
+        content.pack(fill="both", expand=True, pady=10)
+        
+        ctk.CTkLabel(content, text="Sala de Espera", font=("Inter", 24, "bold")).pack(pady=(80, 20))
+        ctk.CTkLabel(content, text="Por favor, espere a que el anfitrión le permita el ingreso...", font=("Inter", 14)).pack()
+
+    def show_meeting_room(self, room_code):
+        self._clear_container()
+        content = ctk.CTkFrame(self.main_container, corner_radius=12)
+        content.pack(fill="both", expand=True, pady=10)
+        
+        ctk.CTkLabel(content, text=f"Reunión Activa: {room_code}", font=("Inter", 24, "bold"), text_color="#3498db").pack(pady=(80, 20))
+        ctk.CTkLabel(content, text="¡Has sido admitido! (El chat y cámara se implementarán en la Fase 4)", font=("Inter", 14)).pack()    
 
 if __name__ == "__main__":
     app = App()

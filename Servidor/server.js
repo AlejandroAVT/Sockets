@@ -6,6 +6,9 @@ const HOST = '0.0.0.0';
 const MAX_FRAME_SIZE = 10 * 1024 * 1024; // Límite de 10 MB por mensaje
 const SOCKET_TIMEOUT = 120000; // 2 minutos de inactividad máxima
 
+const activeRooms = new Map(); 
+const waitingRooms = new Map(); 
+const hostByRoom = new Map(); 
 const socketSessions = new Map();
 
 const server = net.createServer((socket) => {
@@ -110,6 +113,15 @@ function handleMessage(socket, jsonMsg, binaryMsg) {
         case 'REGISTER_REQUEST':
             processRegister(socket, jsonMsg);
             break;
+        case 'CREATE_ROOM': 
+            processCreateRoom(socket, jsonMsg);
+            break;
+        case 'JOIN_ROOM_REQUEST': 
+            processJoinRoomRequest(socket, jsonMsg);
+            break;
+        case 'ADMIT_USER': 
+            processAdmitUser(socket, jsonMsg);
+            break;
         default:
             console.warn(`Tipo de mensaje no admitido en esta fase: ${jsonMsg.type}`);
     }
@@ -170,6 +182,105 @@ function processRegister(socket, jsonMsg) {
     } else {
         sendFramedMessage(socket, { type: 'REGISTER_RESPONSE', success: false, message: 'Error en BD: ' + result.error });
     }
+}
+
+function processCreateRoom(socket, jsonMsg) {
+    const session = socketSessions.get(socket);
+    if (!session || !session.userId) return;
+
+    const { codigoSala, nombre } = jsonMsg;
+
+    const result = db.crearSala(codigoSala, nombre, session.userId);
+    
+    if (!result.success) {
+        sendFramedMessage(socket, { type: 'CREATE_ROOM_RESPONSE', success: false, message: 'Error al crear sala o el código ya existe.' });
+    } else {
+        activeRooms.set(codigoSala, new Set([socket]));
+        waitingRooms.set(codigoSala, []);
+        hostByRoom.set(codigoSala, socket);
+        session.currentRoom = codigoSala;
+
+        sendFramedMessage(socket, { 
+            type: 'CREATE_ROOM_RESPONSE', 
+            success: true, 
+            message: 'Sala creada con éxito.', 
+            codigoSala: codigoSala, 
+            nombreSala: nombre 
+        });
+        console.log(`Sala ${codigoSala} creada por ${session.userName}`);
+    }
+}
+
+function processJoinRoomRequest(socket, jsonMsg) {
+    const session = socketSessions.get(socket);
+    if (!session || !session.userId) return;
+
+    const { codigoSala } = jsonMsg;
+
+    const resultSala = db.obtenerSalaPorCodigo(codigoSala);
+    
+    if (!resultSala.success || !resultSala.sala) {
+        sendFramedMessage(socket, { type: 'JOIN_ROOM_RESPONSE', success: false, message: 'La sala no existe o no está activa.' });
+        return;
+    }
+
+    const resultSol = db.registrarSolicitud(resultSala.sala.IdSala, session.userId);
+    
+    if (!resultSol.success) {
+        sendFramedMessage(socket, { type: 'JOIN_ROOM_RESPONSE', success: false, message: 'Error al registrar la solicitud.' });
+    } else {
+        sendFramedMessage(socket, { type: 'JOIN_ROOM_RESPONSE', success: true, estado: 'Pendiente' });
+        
+        const waitingList = waitingRooms.get(codigoSala) || [];
+        waitingList.push({ userId: session.userId, socket: socket, userName: session.userName });
+        waitingRooms.set(codigoSala, waitingList);
+
+        const hostSocket = hostByRoom.get(codigoSala);
+        if (hostSocket && !hostSocket.destroyed) {
+            sendFramedMessage(hostSocket, {
+                type: 'WAITING_ROOM_UPDATE',
+                usuariosPendientes: waitingList.map(u => ({ id: u.userId, nombre: u.userName }))
+            });
+        }
+    }
+}
+
+function processAdmitUser(socket, jsonMsg) {
+    const session = socketSessions.get(socket);
+    const { codigoSala, userIdToAdmit, accept } = jsonMsg;
+
+    if (hostByRoom.get(codigoSala) !== socket) {
+         return; 
+    }
+
+    const waitingList = waitingRooms.get(codigoSala);
+    if (!waitingList) return;
+
+    const userIndex = waitingList.findIndex(u => u.userId === userIdToAdmit);
+    if (userIndex === -1) return;
+
+    const userToAdmit = waitingList.splice(userIndex, 1)[0]; 
+    const targetSocket = userToAdmit.socket;
+
+    if (accept) {
+        const roomSockets = activeRooms.get(codigoSala);
+        if (roomSockets) {
+            roomSockets.add(targetSocket);
+        }
+        
+        const guestSession = socketSessions.get(targetSocket);
+        if(guestSession) guestSession.currentRoom = codigoSala;
+
+        sendFramedMessage(targetSocket, { type: 'ADMIT_RESULT', success: true, codigoSala: codigoSala });
+        
+    } else {
+         sendFramedMessage(targetSocket, { type: 'ADMIT_RESULT', success: false, message: "El anfitrión ha rechazado tu solicitud." });
+    }
+
+    sendFramedMessage(socket, {
+        type: 'WAITING_ROOM_UPDATE',
+        usuariosPendientes: waitingList.map(u => ({ id: u.userId, nombre: u.userName }))
+    });
 }
 
 server.on('error', (err) => {
