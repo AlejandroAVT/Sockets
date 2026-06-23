@@ -13,3 +13,6 @@ ENV/
 # Node
 node_modules/
 npm-debug.log*
+
+# Uploads
+Servidor/uploads/

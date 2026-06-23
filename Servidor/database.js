@@ -138,6 +138,42 @@ function obtenerSalasPorHost(idHost) {
     }
 }
 
+function guardarArchivoCompartido(idSala, idUsuario, nombreArchivo, rutaArchivo) {
+    const stmt = db.prepare('INSERT INTO ArchivosCompartidos (IdSala, IdUsuario, NombreArchivo, RutaArchivo) VALUES (?, ?, ?, ?)');
+    try {
+        const res = stmt.run(idSala, idUsuario, nombreArchivo, rutaArchivo);
+        return { success: true, idArchivo: res.lastInsertRowid };
+    } catch (err) {
+        return { success: false, error: err.message };
+    }
+}
+
+function obtenerArchivosPorSala(idSala) {
+    const stmt = db.prepare(`
+        SELECT a.IdArchivo, a.IdUsuario, u.Nombres as userName, a.NombreArchivo, a.FechaEnvio
+        FROM ArchivosCompartidos a
+        JOIN Usuarios u ON a.IdUsuario = u.IdUsuario
+        WHERE a.IdSala = ?
+        ORDER BY a.FechaEnvio ASC
+    `);
+    try {
+        const rows = stmt.all(idSala);
+        return { success: true, archivos: rows };
+    } catch (err) {
+        return { success: false, error: err.message };
+    }
+}
+
+function obtenerArchivoPorId(idArchivo) {
+    const stmt = db.prepare('SELECT IdArchivo, IdSala, IdUsuario, NombreArchivo, RutaArchivo FROM ArchivosCompartidos WHERE IdArchivo = ?');
+    try {
+        const row = stmt.get(idArchivo);
+        return { success: true, archivo: row };
+    } catch (err) {
+        return { success: false, error: err.message };
+    }
+}
+
 module.exports = {
     hashPassword,
     verifyPassword,
@@ -148,6 +184,9 @@ module.exports = {
     registrarSolicitud,
     guardarMensaje,
     obtenerMensajesPorSala,
-    obtenerSalasPorHost
+    obtenerSalasPorHost,
+    guardarArchivoCompartido,
+    obtenerArchivosPorSala,
+    obtenerArchivoPorId
 };
 
