@@ -6,7 +6,7 @@ import queue
 import time
 import os
 import tkinter as tk
-from tkinter import messagebox
+from tkinter import messagebox, filedialog
 import customtkinter as ctk
 
 DEFAULT_HOST = 'localhost'
@@ -396,6 +396,10 @@ class App(ctk.CTk):
                 # Cargar historial de chat
                 for msg in json_msg.get('chatHistory', []):
                     self.append_chat_message(msg['userName'], msg['Contenido'], msg['FechaEnvio'])
+                    
+                # Cargar historial de archivos
+                for f in json_msg.get('fileHistory', []):
+                    self.add_file_to_list(f['IdArchivo'], f['NombreArchivo'], f['userName'])
             else:
                 messagebox.showwarning("Acceso Denegado", json_msg.get('message', 'Has sido rechazado.'))
                 self.show_lobby_screen()
@@ -406,12 +410,65 @@ class App(ctk.CTk):
         elif msg_type == 'ROOM_CLOSED':
             messagebox.showinfo("Sala Cerrada", json_msg.get('message', 'La sala ha sido cerrada.'))
             self.show_lobby_screen()
+            self.geometry("600x550")
             
         elif msg_type == 'MY_ROOMS_RESPONSE':
             if json_msg['success']:
                 self.populate_my_rooms_list(json_msg['salas'])
             else:
                 messagebox.showerror("Error", json_msg.get('message', 'Error al cargar tus salas.'))
+
+        elif msg_type == 'FILE_SHARED':
+            self.add_file_to_list(json_msg['fileId'], json_msg['fileName'], json_msg['senderName'])
+            
+        elif msg_type == 'FILE_DOWNLOAD_START':
+            file_name = json_msg['fileName']
+            file_size = json_msg['fileSize']
+            print(f"Iniciando descarga de {file_name} ({file_size} bytes)")
+            
+        elif msg_type == 'FILE_DOWNLOAD_CHUNK':
+            file_id = json_msg['fileId']
+            is_last = json_msg['isLast']
+            
+            download = getattr(self, 'active_downloads', {}).get(file_id)
+            if download:
+                if bin_data and len(bin_data) > 0:
+                    download['fileObj'].write(bin_data)
+                if is_last:
+                    download['fileObj'].close()
+                    del self.active_downloads[file_id]
+                    messagebox.showinfo("Descarga Exitosa", f"El archivo \"{download['fileName']}\" se ha descargado correctamente.")
+                    
+        elif msg_type == 'FILE_DOWNLOAD_ERROR':
+            file_id = json_msg.get('fileId')
+            msg = json_msg.get('message', 'Error desconocido.')
+            messagebox.showerror("Error de Descarga", f"No se pudo descargar el archivo: {msg}")
+            if file_id and hasattr(self, 'active_downloads') and file_id in self.active_downloads:
+                download = self.active_downloads[file_id]
+                download['fileObj'].close()
+                try:
+                    os.remove(download['filePath'])
+                except:
+                    pass
+                del self.active_downloads[file_id]
+                
+        elif msg_type == 'UPLOAD_PROGRESS':
+            file_name = json_msg['fileName']
+            progress = json_msg['progress']
+            if hasattr(self, 'lbl_upload_status') and self.lbl_upload_status.winfo_exists():
+                if progress < 100:
+                    self.lbl_upload_status.configure(text=f"Subiendo {file_name}: {progress}%")
+                else:
+                    self.lbl_upload_status.configure(text="Subida completada con éxito.")
+                    self.after(3000, lambda: self.lbl_upload_status.configure(text="") if hasattr(self, 'lbl_upload_status') and self.lbl_upload_status.winfo_exists() else None)
+                    
+        elif msg_type == 'UPLOAD_ERROR':
+            file_name = json_msg['fileName']
+            err = json_msg['error']
+            messagebox.showerror("Error de Subida", f"Error al subir {file_name}: {err}")
+            if hasattr(self, 'lbl_upload_status') and self.lbl_upload_status.winfo_exists():
+                self.lbl_upload_status.configure(text="Error al subir archivo.")
+                self.after(3000, lambda: self.lbl_upload_status.configure(text="") if hasattr(self, 'lbl_upload_status') and self.lbl_upload_status.winfo_exists() else None)
 
     def _clear_container(self):
         for widget in self.main_container.winfo_children():
@@ -608,14 +665,14 @@ class App(ctk.CTk):
         lbl_video_placeholder = ctk.CTkLabel(self.video_panel, text="Cámara (se implementará en la fase 9)", font=("Inter", 14, "italic"), text_color="gray")
         lbl_video_placeholder.pack(expand=True)
         
-        # Panel derecho (Chat)
+        # Panel derecho (Chat y Archivos)
         chat_panel = ctk.CTkFrame(layout, width=300, corner_radius=10)
         chat_panel.pack(side="right", fill="both", padx=(5, 0))
         
-        ctk.CTkLabel(chat_panel, text="Chat de la Reunión", font=("Inter", 14, "bold")).pack(pady=10)
+        ctk.CTkLabel(chat_panel, text="Chat de la Reunión", font=("Inter", 14, "bold")).pack(pady=(10, 5))
         
         self.chat_display = ctk.CTkTextbox(chat_panel, state="disabled", wrap="word", fg_color="#181818")
-        self.chat_display.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+        self.chat_display.pack(fill="both", expand=True, padx=10, pady=(0, 5))
         
         input_frame = ctk.CTkFrame(chat_panel, fg_color="transparent")
         input_frame.pack(fill="x", padx=10, pady=(0, 10))
@@ -627,7 +684,22 @@ class App(ctk.CTk):
         
         btn_send = ctk.CTkButton(input_frame, text="Enviar", width=60, command=self.on_send_chat)
         btn_send.pack(side="right")
-
+        
+        # Sección de Archivos
+        ctk.CTkLabel(chat_panel, text="Archivos Compartidos", font=("Inter", 13, "bold")).pack(pady=(10, 5))
+        
+        self.files_frame = ctk.CTkScrollableFrame(chat_panel, height=120, fg_color="#181818")
+        self.files_frame.pack(fill="x", padx=10, pady=(0, 5))
+        
+        file_actions_frame = ctk.CTkFrame(chat_panel, fg_color="transparent")
+        file_actions_frame.pack(fill="x", padx=10, pady=(0, 10))
+        
+        self.lbl_upload_status = ctk.CTkLabel(file_actions_frame, text="", font=("Inter", 11, "italic"), text_color="#1abc9c")
+        self.lbl_upload_status.pack(pady=(0, 5))
+        
+        btn_share_file = ctk.CTkButton(file_actions_frame, text="Compartir Archivo", fg_color="#16a085", hover_color="#117a65", command=self.on_share_file_click)
+        btn_share_file.pack(fill="x")
+ 
     def on_send_chat(self):
         text = self.chat_entry.get().strip()
         if not text:
@@ -637,6 +709,84 @@ class App(ctk.CTk):
         self.client.send_message({
             'type': 'CHAT_MESSAGE',
             'message': text
+        })
+
+    def on_share_file_click(self):
+        file_path = filedialog.askopenfilename(title="Seleccionar archivo para compartir")
+        if not file_path:
+            return
+            
+        file_name = os.path.basename(file_path)
+        file_size = os.path.getsize(file_path)
+        
+        threading.Thread(target=self.bg_upload_file, args=(file_path, file_name, file_size), daemon=True).start()
+
+    def bg_upload_file(self, file_path, file_name, file_size):
+        try:
+            self.gui_queue.put(({'type': 'UPLOAD_PROGRESS', 'fileName': file_name, 'progress': 0}, None))
+            
+            chunk_size = 4 * 1024 # 4KB
+            total_chunks = (file_size + chunk_size - 1) // chunk_size if file_size > 0 else 1
+            
+            with open(file_path, 'rb') as f:
+                for chunk_idx in range(total_chunks):
+                    if not self.client or not self.client.connected:
+                        break
+                        
+                    data = f.read(chunk_size)
+                    is_last = (chunk_idx == total_chunks - 1)
+                    
+                    self.client.send_message({
+                        'type': 'FILE_CHUNK',
+                        'fileName': file_name,
+                        'chunkIndex': chunk_idx,
+                        'totalChunks': total_chunks,
+                        'isLast': is_last
+                    }, binary_data=data)
+                    
+                    progress = int(((chunk_idx + 1) / total_chunks) * 100)
+                    self.gui_queue.put(({'type': 'UPLOAD_PROGRESS', 'fileName': file_name, 'progress': progress}, None))
+                    
+                    time.sleep(0.01)
+                    
+        except Exception as e:
+            self.gui_queue.put(({'type': 'UPLOAD_ERROR', 'fileName': file_name, 'error': str(e)}, None))
+
+    def add_file_to_list(self, file_id, file_name, sender_name):
+        if not hasattr(self, 'files_frame') or not self.files_frame.winfo_exists():
+            return
+        row = ctk.CTkFrame(self.files_frame, fg_color="#222222")
+        row.pack(fill="x", pady=2, padx=5)
+        
+        lbl = ctk.CTkLabel(row, text=f"{file_name} (por {sender_name})", font=("Inter", 11), anchor="w")
+        lbl.pack(side="left", fill="x", expand=True, padx=8, pady=4)
+        
+        btn_dl = ctk.CTkButton(row, text="Descargar", width=70, height=22, font=("Inter", 10),
+                               command=lambda f_id=file_id, f_name=file_name: self.on_download_file_click(f_id, f_name))
+        btn_dl.pack(side="right", padx=5, pady=4)
+
+    def on_download_file_click(self, file_id, file_name):
+        file_path = filedialog.asksaveasfilename(
+            title="Guardar archivo",
+            initialfile=file_name,
+            defaultextension=os.path.splitext(file_name)[1]
+        )
+        if not file_path:
+            return
+            
+        if not hasattr(self, 'active_downloads'):
+            self.active_downloads = {}
+            
+        self.active_downloads[file_id] = {
+            'filePath': file_path,
+            'fileName': file_name,
+            'expectedChunk': 0,
+            'fileObj': open(file_path, 'wb')
+        }
+        
+        self.client.send_message({
+            'type': 'FILE_DOWNLOAD_REQUEST',
+            'fileId': file_id
         })
 
     def append_chat_message(self, sender, text, timestamp=""):

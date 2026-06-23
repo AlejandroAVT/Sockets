@@ -1,8 +1,15 @@
 const net = require('net');
 const db = require('./database');
+const fs = require('fs');
+const path = require('path');
 
 const PORT = 8080;
 const HOST = '0.0.0.0';
+const UPLOADS_DIR = path.join(__dirname, 'uploads');
+
+if (!fs.existsSync(UPLOADS_DIR)) {
+    fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+}
 const MAX_FRAME_SIZE = 10 * 1024 * 1024; // Límite de 10 MB por mensaje
 const SOCKET_TIMEOUT = 120000; // 2 minutos de inactividad máxima
 
@@ -126,6 +133,12 @@ function handleMessage(socket, jsonMsg, binaryMsg) {
             break;
         case 'LEAVE_ROOM':
             processLeaveRoom(socket);
+            break;
+        case 'FILE_CHUNK':
+            processFileChunk(socket, jsonMsg, binaryMsg);
+            break;
+        case 'FILE_DOWNLOAD_REQUEST':
+            processFileDownloadRequest(socket, jsonMsg);
             break;
         case 'CANCEL_JOIN_REQUEST':
             processCancelJoinRequest(socket);
@@ -352,16 +365,20 @@ function processAdmitUser(socket, jsonMsg) {
         const roomRes = db.obtenerSalaPorCodigo(codigoSala);
         const room = roomRes.success ? roomRes.sala : null;
         let chatHistory = [];
+        let fileHistory = [];
         if (room) {
             const historyRes = db.obtenerMensajesPorSala(room.IdSala);
             chatHistory = historyRes.success ? historyRes.mensajes : [];
+            const filesRes = db.obtenerArchivosPorSala(room.IdSala);
+            fileHistory = filesRes.success ? filesRes.archivos : [];
         }
 
         sendFramedMessage(targetSocket, { 
             type: 'ADMIT_RESULT', 
             success: true, 
             codigoSala: codigoSala,
-            chatHistory: chatHistory
+            chatHistory: chatHistory,
+            fileHistory: fileHistory
         });
         
         if (guestSession) {
@@ -421,6 +438,12 @@ function processLeaveRoom(socket) {
     const session = socketSessions.get(socket);
     if (!session || !session.currentRoom) return;
 
+    if (session.upload && session.upload.fileStream) {
+        session.upload.fileStream.destroy();
+        session.upload = null;
+        console.log(`Subida de archivo cancelada para ${session.userName} al salir de la sala.`);
+    }
+
     const roomCode = session.currentRoom;
     const isHost = hostByRoom.get(roomCode) === socket;
 
@@ -465,9 +488,151 @@ function processLeaveRoom(socket) {
     session.currentRoom = null;
 }
 
+function processFileChunk(socket, jsonMsg, binaryMsg) {
+    const session = socketSessions.get(socket);
+    if (!session || !session.userId || !session.currentRoom) return;
+
+    const { fileName, chunkIndex, totalChunks, isLast } = jsonMsg;
+
+    if (chunkIndex === 0) {
+        const safeName = `${Date.now()}_${path.basename(fileName)}`;
+        const filePath = path.join(UPLOADS_DIR, safeName);
+        const fileStream = fs.createWriteStream(filePath);
+        session.upload = {
+            fileName: fileName,
+            safeName: safeName,
+            filePath: filePath,
+            fileStream: fileStream,
+            expectedChunk: 0
+        };
+    }
+
+    const upload = session.upload;
+    if (!upload) {
+        sendFramedMessage(socket, { type: 'FILE_UPLOAD_ERROR', message: 'Falta inicialización de fragmentos.' });
+        return;
+    }
+
+    if (chunkIndex !== upload.expectedChunk) {
+        sendFramedMessage(socket, { type: 'FILE_UPLOAD_ERROR', message: 'Fragmento fuera de orden.' });
+        return;
+    }
+
+    if (binaryMsg && binaryMsg.length > 0) {
+        upload.fileStream.write(binaryMsg);
+    }
+    upload.expectedChunk++;
+
+    if (isLast) {
+        upload.fileStream.end();
+        
+        const roomCode = session.currentRoom;
+        const roomRes = db.obtenerSalaPorCodigo(roomCode);
+        if (roomRes.success && roomRes.sala) {
+            const dbRes = db.guardarArchivoCompartido(roomRes.sala.IdSala, session.userId, upload.fileName, upload.safeName);
+            if (dbRes.success) {
+                const fileId = dbRes.idArchivo;
+                const roomSockets = activeRooms.get(roomCode);
+                
+                const fileMsg = {
+                    type: 'FILE_SHARED',
+                    fileId: fileId,
+                    fileName: upload.fileName,
+                    senderName: session.userName,
+                    sentAt: new Date().toISOString()
+                };
+
+                const systemMsg = {
+                    type: 'CHAT_MESSAGE',
+                    userId: 0,
+                    userName: 'Sistema',
+                    message: `${session.userName} ha compartido el archivo "${upload.fileName}".`,
+                    sentAt: new Date().toISOString()
+                };
+
+                if (roomSockets) {
+                    for (const clientSocket of roomSockets) {
+                        sendFramedMessage(clientSocket, fileMsg);
+                        sendFramedMessage(clientSocket, systemMsg);
+                    }
+                }
+                console.log(`Archivo compartido en sala ${roomCode}: ${upload.fileName} por ${session.userName}`);
+            }
+        }
+        session.upload = null;
+    }
+}
+
+function processFileDownloadRequest(socket, jsonMsg) {
+    const session = socketSessions.get(socket);
+    if (!session || !session.currentRoom) return;
+
+    const { fileId } = jsonMsg;
+    const dbRes = db.obtenerArchivoPorId(fileId);
+    if (!dbRes.success || !dbRes.archivo) {
+        sendFramedMessage(socket, { type: 'FILE_DOWNLOAD_ERROR', fileId: fileId, message: 'Archivo no encontrado.' });
+        return;
+    }
+
+    const archivo = dbRes.archivo;
+    const filePath = path.join(UPLOADS_DIR, archivo.RutaArchivo);
+
+    if (!fs.existsSync(filePath)) {
+        sendFramedMessage(socket, { type: 'FILE_DOWNLOAD_ERROR', fileId: fileId, message: 'El archivo físico no existe en el servidor.' });
+        return;
+    }
+
+    const stats = fs.statSync(filePath);
+    const fileSize = stats.size;
+
+    sendFramedMessage(socket, {
+        type: 'FILE_DOWNLOAD_START',
+        fileId: fileId,
+        fileName: archivo.NombreArchivo,
+        fileSize: fileSize
+    });
+
+    const readStream = fs.createReadStream(filePath, { highWaterMark: 16 * 1024 });
+    let chunkIndex = 0;
+
+    readStream.on('data', (chunk) => {
+        readStream.pause();
+        
+        sendFramedMessage(socket, {
+            type: 'FILE_DOWNLOAD_CHUNK',
+            fileId: fileId,
+            chunkIndex: chunkIndex++,
+            isLast: false
+        }, chunk);
+        
+        readStream.resume();
+    });
+
+    readStream.on('end', () => {
+        sendFramedMessage(socket, {
+            type: 'FILE_DOWNLOAD_CHUNK',
+            fileId: fileId,
+            chunkIndex: chunkIndex,
+            isLast: true
+        });
+        console.log(`Archivo enviado con éxito a ${session.userName}: ${archivo.NombreArchivo}`);
+    });
+
+    readStream.on('error', (err) => {
+        console.error(`Error al leer archivo para descarga:`, err.message);
+        sendFramedMessage(socket, { type: 'FILE_DOWNLOAD_ERROR', fileId: fileId, message: 'Error de lectura en el servidor.' });
+    });
+}
+
 function handleDisconnect(socket) {
     const session = socketSessions.get(socket);
     if (!session) return;
+
+    if (session.upload && session.upload.fileStream) {
+        session.upload.fileStream.destroy();
+        session.upload = null;
+        console.log(`Subida de archivo cancelada para ${session.userName} debido a desconexión.`);
+    }
 
     // 1. Remove from waiting lists
     for (const [roomCode, waitingList] of waitingRooms.entries()) {
