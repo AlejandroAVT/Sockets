@@ -61,11 +61,11 @@ function getUserByCorreo(correo) {
     return stmt.get(correo);
 }
 
-function createUser(nombres, correo, password, rol = 'Usuario') {
+function createUser(nombres, correo, password) {
     const hash = hashPassword(password);
-    const stmt = db.prepare('INSERT INTO Usuarios (Nombres, Correo, PasswordHash, Rol) VALUES (?, ?, ?, ?)');
+    const stmt = db.prepare('INSERT INTO Usuarios (Nombres, Correo, PasswordHash) VALUES (?, ?, ?)');
     try {
-        const res = stmt.run(nombres, correo, hash, rol);
+        const res = stmt.run(nombres, correo, hash);
         return { success: true, userId: res.lastInsertRowid };
     } catch (err) {
         return { success: false, error: err.message };
@@ -102,6 +102,42 @@ function registrarSolicitud(idSala, idUsuario) {
     }
 }
 
+function guardarMensaje(idSala, idUsuario, contenido) {
+    const stmt = db.prepare('INSERT INTO Mensajes (IdSala, IdUsuario, Contenido) VALUES (?, ?, ?)');
+    try {
+        const res = stmt.run(idSala, idUsuario, contenido);
+        return { success: true, idMensaje: res.lastInsertRowid };
+    } catch (err) {
+        return { success: false, error: err.message };
+    }
+}
+
+function obtenerMensajesPorSala(idSala) {
+    const stmt = db.prepare(`
+        SELECT m.IdMensaje, m.IdUsuario, u.Nombres as userName, m.Contenido, m.FechaEnvio
+        FROM Mensajes m
+        JOIN Usuarios u ON m.IdUsuario = u.IdUsuario
+        WHERE m.IdSala = ?
+        ORDER BY m.FechaEnvio ASC
+    `);
+    try {
+        const rows = stmt.all(idSala);
+        return { success: true, mensajes: rows };
+    } catch (err) {
+        return { success: false, error: err.message };
+    }
+}
+
+function obtenerSalasPorHost(idHost) {
+    const stmt = db.prepare(`SELECT CodigoSala, Nombre, Estado FROM Salas WHERE IdHost = ?`);
+    try {
+        const rows = stmt.all(idHost);
+        return { success: true, salas: rows };
+    } catch (err) {
+        return { success: false, error: err.message };
+    }
+}
+
 module.exports = {
     hashPassword,
     verifyPassword,
@@ -109,5 +145,9 @@ module.exports = {
     createUser, 
     crearSala, 
     obtenerSalaPorCodigo, 
-    registrarSolicitud
+    registrarSolicitud,
+    guardarMensaje,
+    obtenerMensajesPorSala,
+    obtenerSalasPorHost
 };
+
