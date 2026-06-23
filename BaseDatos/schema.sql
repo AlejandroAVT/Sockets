@@ -4,7 +4,6 @@ CREATE TABLE IF NOT EXISTS Usuarios (
     Nombres TEXT NOT NULL,
     Correo TEXT NOT NULL UNIQUE,
     PasswordHash TEXT NOT NULL,
-    Rol TEXT NOT NULL DEFAULT 'Usuario',
     Activo INTEGER NOT NULL DEFAULT 1
 );
 

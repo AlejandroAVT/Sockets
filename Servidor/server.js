@@ -18,8 +18,7 @@ const server = net.createServer((socket) => {
     socketSessions.set(socket, {
         userId: null,
         userName: null,
-        correo: null,
-        rol: null
+        correo: null
     });
 
     socket.setTimeout(SOCKET_TIMEOUT);
@@ -40,7 +39,7 @@ const server = net.createServer((socket) => {
             const totalFrameLen = 8 + jsonLen + binLen;
 
             if (totalFrameLen > MAX_FRAME_SIZE) {
-                console.error(`[ERROR] Trama de ${clientAddress} excede el tamaño máximo permitido (${totalFrameLen} bytes). Cerrando conexión.`);
+                console.error(`Error: Trama de ${clientAddress} excede el tamaño máximo permitido (${totalFrameLen} bytes). Cerrando conexión.`);
                 socket.destroy();
                 return;
             }
@@ -72,7 +71,7 @@ const server = net.createServer((socket) => {
 
     socket.on('close', (hadError) => {
         console.log(`Cliente desconectado desde: ${clientAddress} ${hadError ? 'debido a un error' : ''}`);
-        socketSessions.delete(socket);
+        handleDisconnect(socket);
     });
 
     socket.on('error', (err) => {
@@ -122,6 +121,18 @@ function handleMessage(socket, jsonMsg, binaryMsg) {
         case 'ADMIT_USER': 
             processAdmitUser(socket, jsonMsg);
             break;
+        case 'CHAT_MESSAGE':
+            processChatMessage(socket, jsonMsg);
+            break;
+        case 'LEAVE_ROOM':
+            processLeaveRoom(socket);
+            break;
+        case 'CANCEL_JOIN_REQUEST':
+            processCancelJoinRequest(socket);
+            break;
+        case 'GET_MY_ROOMS':
+            processGetMyRooms(socket);
+            break;
         default:
             console.warn(`Tipo de mensaje no admitido en esta fase: ${jsonMsg.type}`);
     }
@@ -147,7 +158,6 @@ function processLogin(socket, jsonMsg) {
         session.userId = user.IdUsuario;
         session.userName = user.Nombres;
         session.correo = user.Correo;
-        session.rol = user.Rol;
 
         sendFramedMessage(socket, {
             type: 'LOGIN_RESPONSE',
@@ -155,8 +165,7 @@ function processLogin(socket, jsonMsg) {
             usuario: {
                 id: user.IdUsuario,
                 nombres: user.Nombres,
-                correo: user.Correo,
-                rol: user.Rol
+                correo: user.Correo
             }
         });
         console.log(`Usuario autenticado: ${user.Nombres} (${user.Correo})`);
@@ -175,7 +184,7 @@ function processRegister(socket, jsonMsg) {
         return;
     }
 
-    const result = db.createUser(nombres, correo, password, 'Usuario');
+    const result = db.createUser(nombres, correo, password);
     if (result.success) {
         sendFramedMessage(socket, { type: 'REGISTER_RESPONSE', success: true, message: 'Usuario registrado exitosamente.' });
         console.log(`Nuevo usuario registrado: ${nombres} (${correo})`);
@@ -189,6 +198,34 @@ function processCreateRoom(socket, jsonMsg) {
     if (!session || !session.userId) return;
 
     const { codigoSala, nombre } = jsonMsg;
+
+    // Verificar si la sala ya existe en la base de datos
+    const existing = db.obtenerSalaPorCodigo(codigoSala);
+    if (existing.success && existing.sala) {
+        if (existing.sala.IdHost === session.userId) {
+            if (hostByRoom.has(codigoSala)) {
+                sendFramedMessage(socket, { type: 'CREATE_ROOM_RESPONSE', success: false, message: 'La sala ya está activa en otra sesión.' });
+                return;
+            }
+            activeRooms.set(codigoSala, new Set([socket]));
+            waitingRooms.set(codigoSala, []);
+            hostByRoom.set(codigoSala, socket);
+            session.currentRoom = codigoSala;
+
+            sendFramedMessage(socket, { 
+                type: 'CREATE_ROOM_RESPONSE', 
+                success: true, 
+                message: 'Sala abierta con éxito.', 
+                codigoSala: codigoSala, 
+                nombreSala: nombre 
+            });
+            console.log(`Sala existente ${codigoSala} reabierta por su host ${session.userName}`);
+            return;
+        } else {
+            sendFramedMessage(socket, { type: 'CREATE_ROOM_RESPONSE', success: false, message: 'El código de sala ya existe y pertenece a otro usuario.' });
+            return;
+        }
+    }
 
     const result = db.crearSala(codigoSala, nombre, session.userId);
     
@@ -208,6 +245,26 @@ function processCreateRoom(socket, jsonMsg) {
             nombreSala: nombre 
         });
         console.log(`Sala ${codigoSala} creada por ${session.userName}`);
+    }
+}
+
+function processGetMyRooms(socket) {
+    const session = socketSessions.get(socket);
+    if (!session || !session.userId) return;
+
+    const result = db.obtenerSalasPorHost(session.userId);
+    if (result.success) {
+        sendFramedMessage(socket, {
+            type: 'MY_ROOMS_RESPONSE',
+            success: true,
+            salas: result.salas
+        });
+    } else {
+        sendFramedMessage(socket, {
+            type: 'MY_ROOMS_RESPONSE',
+            success: false,
+            message: 'Error al obtener tus salas: ' + result.error
+        });
     }
 }
 
@@ -245,6 +302,27 @@ function processJoinRoomRequest(socket, jsonMsg) {
     }
 }
 
+function processCancelJoinRequest(socket) {
+    const session = socketSessions.get(socket);
+    if (!session || !session.userId) return;
+
+    for (const [roomCode, waitingList] of waitingRooms.entries()) {
+        const index = waitingList.findIndex(u => u.socket === socket);
+        if (index !== -1) {
+            waitingList.splice(index, 1);
+            console.log(`Usuario en espera ${session.userName || socket.remoteAddress} canceló su solicitud para la sala ${roomCode}`);
+            
+            const hostSocket = hostByRoom.get(roomCode);
+            if (hostSocket && !hostSocket.destroyed) {
+                sendFramedMessage(hostSocket, {
+                    type: 'WAITING_ROOM_UPDATE',
+                    usuariosPendientes: waitingList.map(u => ({ id: u.userId, nombre: u.userName }))
+                });
+            }
+        }
+    }
+}
+
 function processAdmitUser(socket, jsonMsg) {
     const session = socketSessions.get(socket);
     const { codigoSala, userIdToAdmit, accept } = jsonMsg;
@@ -269,9 +347,37 @@ function processAdmitUser(socket, jsonMsg) {
         }
         
         const guestSession = socketSessions.get(targetSocket);
-        if(guestSession) guestSession.currentRoom = codigoSala;
+        if (guestSession) guestSession.currentRoom = codigoSala;
 
-        sendFramedMessage(targetSocket, { type: 'ADMIT_RESULT', success: true, codigoSala: codigoSala });
+        const roomRes = db.obtenerSalaPorCodigo(codigoSala);
+        const room = roomRes.success ? roomRes.sala : null;
+        let chatHistory = [];
+        if (room) {
+            const historyRes = db.obtenerMensajesPorSala(room.IdSala);
+            chatHistory = historyRes.success ? historyRes.mensajes : [];
+        }
+
+        sendFramedMessage(targetSocket, { 
+            type: 'ADMIT_RESULT', 
+            success: true, 
+            codigoSala: codigoSala,
+            chatHistory: chatHistory
+        });
+        
+        if (guestSession) {
+            const systemMsg = {
+                type: 'CHAT_MESSAGE',
+                userId: 0,
+                userName: 'Sistema',
+                message: `${guestSession.userName} se ha unido a la reunión.`,
+                sentAt: new Date().toISOString()
+            };
+            if (roomSockets) {
+                for (const clientSocket of roomSockets) {
+                    sendFramedMessage(clientSocket, systemMsg);
+                }
+            }
+        }
         
     } else {
          sendFramedMessage(targetSocket, { type: 'ADMIT_RESULT', success: false, message: "El anfitrión ha rechazado tu solicitud." });
@@ -281,6 +387,152 @@ function processAdmitUser(socket, jsonMsg) {
         type: 'WAITING_ROOM_UPDATE',
         usuariosPendientes: waitingList.map(u => ({ id: u.userId, nombre: u.userName }))
     });
+}
+
+function processChatMessage(socket, jsonMsg) {
+    const session = socketSessions.get(socket);
+    if (!session || !session.userId || !session.currentRoom) return;
+
+    const roomCode = session.currentRoom;
+    const roomRes = db.obtenerSalaPorCodigo(roomCode);
+    if (!roomRes.success || !roomRes.sala) return;
+
+    const saveRes = db.guardarMensaje(roomRes.sala.IdSala, session.userId, jsonMsg.message);
+    if (saveRes.success) {
+        const chatMsg = {
+            type: 'CHAT_MESSAGE',
+            userId: session.userId,
+            userName: session.userName,
+            message: jsonMsg.message,
+            sentAt: new Date().toISOString()
+        };
+
+        const roomSockets = activeRooms.get(roomCode);
+        if (roomSockets) {
+            for (const clientSocket of roomSockets) {
+                sendFramedMessage(clientSocket, chatMsg);
+            }
+        }
+        console.log(`Chat en sala ${roomCode} de ${session.userName}: ${jsonMsg.message}`);
+    }
+}
+
+function processLeaveRoom(socket) {
+    const session = socketSessions.get(socket);
+    if (!session || !session.currentRoom) return;
+
+    const roomCode = session.currentRoom;
+    const isHost = hostByRoom.get(roomCode) === socket;
+
+    if (isHost) {
+        console.log(`Anfitrión ${session.userName} saliendo. Cerrando sala ${roomCode}`);
+        const roomSockets = activeRooms.get(roomCode);
+        if (roomSockets) {
+            for (const clientSocket of roomSockets) {
+                if (clientSocket !== socket && !clientSocket.destroyed) {
+                    sendFramedMessage(clientSocket, {
+                        type: 'ROOM_CLOSED',
+                        message: 'El anfitrión ha salido de la sala. Sala cerrada.'
+                    });
+                    const clientSession = socketSessions.get(clientSocket);
+                    if (clientSession) clientSession.currentRoom = null;
+                }
+            }
+        }
+        activeRooms.delete(roomCode);
+        waitingRooms.delete(roomCode);
+        hostByRoom.delete(roomCode);
+    } else {
+        const roomSockets = activeRooms.get(roomCode);
+        if (roomSockets) {
+            const systemMsg = {
+                type: 'CHAT_MESSAGE',
+                userId: 0,
+                userName: 'Sistema',
+                message: `${session.userName} ha salido de la reunión.`,
+                sentAt: new Date().toISOString()
+            };
+            for (const clientSocket of roomSockets) {
+                if (clientSocket !== socket && !clientSocket.destroyed) {
+                    sendFramedMessage(clientSocket, systemMsg);
+                }
+            }
+            roomSockets.delete(socket);
+            console.log(`Invitado ${session.userName} salió de la sala ${roomCode}`);
+        }
+    }
+
+    session.currentRoom = null;
+}
+
+function handleDisconnect(socket) {
+    const session = socketSessions.get(socket);
+    if (!session) return;
+
+    // 1. Remove from waiting lists
+    for (const [roomCode, waitingList] of waitingRooms.entries()) {
+        const index = waitingList.findIndex(u => u.socket === socket);
+        if (index !== -1) {
+            waitingList.splice(index, 1);
+            console.log(`Usuario en espera removido de la sala ${roomCode}`);
+            // Notify host of the updated waiting room
+            const hostSocket = hostByRoom.get(roomCode);
+            if (hostSocket && !hostSocket.destroyed) {
+                sendFramedMessage(hostSocket, {
+                    type: 'WAITING_ROOM_UPDATE',
+                    usuariosPendientes: waitingList.map(u => ({ id: u.userId, nombre: u.userName }))
+                });
+            }
+        }
+    }
+
+    // 2. Remove from activeRooms / close room if host
+    if (session.currentRoom) {
+        const roomCode = session.currentRoom;
+        const isHost = hostByRoom.get(roomCode) === socket;
+
+        if (isHost) {
+            console.log(`Anfitrión desconectado. Cerrando sala ${roomCode}`);
+            const roomSockets = activeRooms.get(roomCode);
+            if (roomSockets) {
+                for (const clientSocket of roomSockets) {
+                    if (clientSocket !== socket && !clientSocket.destroyed) {
+                        sendFramedMessage(clientSocket, {
+                            type: 'ROOM_CLOSED',
+                            message: 'El anfitrión se ha desconectado. Sala cerrada.'
+                        });
+                        const clientSession = socketSessions.get(clientSocket);
+                        if (clientSession) clientSession.currentRoom = null;
+                    }
+                }
+            }
+            activeRooms.delete(roomCode);
+            waitingRooms.delete(roomCode);
+            hostByRoom.delete(roomCode);
+        } else {
+            // It's a guest
+            const roomSockets = activeRooms.get(roomCode);
+            if (roomSockets) {
+                roomSockets.delete(socket);
+                console.log(`Invitado ${session.userName} removido de la sala ${roomCode}`);
+                
+                const systemMsg = {
+                    type: 'CHAT_MESSAGE',
+                    userId: 0,
+                    userName: 'Sistema',
+                    message: `${session.userName} se ha desconectado.`,
+                    sentAt: new Date().toISOString()
+                };
+                for (const clientSocket of roomSockets) {
+                    if (!clientSocket.destroyed) {
+                        sendFramedMessage(clientSocket, systemMsg);
+                    }
+                }
+            }
+        }
+    }
+
+    socketSessions.delete(socket);
 }
 
 server.on('error', (err) => {
