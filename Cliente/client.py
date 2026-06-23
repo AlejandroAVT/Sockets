@@ -5,6 +5,9 @@ import struct
 import queue
 import time
 import os
+import cv2
+from PIL import Image
+import io
 import tkinter as tk
 from tkinter import messagebox, filedialog
 import customtkinter as ctk
@@ -368,6 +371,13 @@ class App(ctk.CTk):
                 self.is_host = True
                 self.current_room_code = json_msg['codigoSala']
                 self.show_meeting_room(json_msg['codigoSala'])
+                
+                for msg in json_msg.get('chatHistory', []):
+                    self.append_chat_message(msg['userName'], msg['Contenido'], msg['FechaEnvio'])
+                    
+                for f in json_msg.get('fileHistory', []):
+                    self.add_file_to_list(f['IdArchivo'], f['NombreArchivo'], f['userName'])
+                    
             else:
                 messagebox.showerror("Error", json_msg.get('message', 'Error al crear sala.'))
                 
@@ -470,6 +480,40 @@ class App(ctk.CTk):
                 self.lbl_upload_status.configure(text="Error al subir archivo.")
                 self.after(3000, lambda: self.lbl_upload_status.configure(text="") if hasattr(self, 'lbl_upload_status') and self.lbl_upload_status.winfo_exists() else None)
 
+        elif msg_type == 'CAMERA_FRAME' or msg_type == 'LOCAL_CAMERA_FRAME':
+            if bin_data:
+                u_id = json_msg.get('userId')
+                # BLOQUEO ANTI-LAG: Si sabemos que está apagada, ignoramos el frame retrasado
+                if not self.users_cam_state.get(u_id, True):
+                    return 
+                    
+                try:
+                    image = Image.open(io.BytesIO(bin_data))
+                    ctk_image = ctk.CTkImage(light_image=image, dark_image=image, size=(320, 240))
+                    u_name = json_msg.get('userName', 'Desconocido')
+                    self.update_camera_frame(u_id, u_name, ctk_image=ctk_image)
+                except Exception as e:
+                    pass
+
+        elif msg_type == 'CAMERA_TOGGLE':
+            u_id = json_msg.get('userId')
+            state = json_msg.get('state')
+            self.users_cam_state[u_id] = state # Guardamos el nuevo estado en memoria
+            if not state: 
+                self.update_camera_frame(u_id, "", is_off=True)
+                
+        elif msg_type == 'PARTICIPANTS_UPDATE':
+            users = json_msg.get('users', [])
+            if hasattr(self, 'lbl_participants') and self.lbl_participants.winfo_exists():
+                self.lbl_participants.configure(text=f"Participantes en sala: {len(users)}")
+        
+        elif msg_type == 'DELETE_ROOM_RESPONSE':
+            if json_msg['success']:
+                messagebox.showinfo("Eliminada", "Sala eliminada con éxito.")
+                self.refresh_my_rooms() # Recargamos la lista automáticamente
+            else:
+                messagebox.showerror("Error", json_msg.get('message', 'No se pudo eliminar la sala.'))
+                    
     def _clear_container(self):
         for widget in self.main_container.winfo_children():
             widget.destroy()
@@ -580,6 +624,17 @@ class App(ctk.CTk):
             ctk.CTkLabel(info_frame, text=sala['CodigoSala'], font=("Inter", 13, "bold"), anchor="w").pack(fill="x")
             ctk.CTkLabel(info_frame, text=sala['Nombre'], font=("Inter", 11), text_color="gray", anchor="w").pack(fill="x")
             
+            btn_del = ctk.CTkButton(
+                frame, 
+                text="X", 
+                width=30, 
+                height=28,
+                fg_color="#e74c3c", 
+                hover_color="#c0392b",
+                command=lambda code=sala['CodigoSala']: self.on_delete_room_click(code)
+            )
+            btn_del.pack(side="right", padx=(0, 5), pady=5)
+            
             btn_start = ctk.CTkButton(
                 frame, 
                 text="Iniciar", 
@@ -604,6 +659,14 @@ class App(ctk.CTk):
             'codigoSala': code,
             'nombre': name
         })
+
+    def on_delete_room_click(self, code):
+        if messagebox.askyesno("Confirmar", f"¿Estás seguro que deseas eliminar permanentemente la sala {code}?"):
+            if self.client and self.client.connected:
+                self.client.send_message({
+                    'type': 'DELETE_ROOM',
+                    'codigoSala': code
+                })
 
     def on_join_room(self):
         code = self.entry_join_code.get().strip()
@@ -635,6 +698,30 @@ class App(ctk.CTk):
                 'type': 'CANCEL_JOIN_REQUEST'
             })
         self.show_lobby_screen()
+        
+    def update_camera_frame(self, user_id, user_name, ctk_image=None, is_off=False):
+        if not hasattr(self, 'cameras_frame') or not self.cameras_frame.winfo_exists():
+            return
+            
+        if user_id not in self.camera_widgets:
+            # Crear un nuevo marco para este usuario
+            frame = ctk.CTkFrame(self.cameras_frame, fg_color="black", corner_radius=8)
+            frame.pack(side="top", pady=5, padx=5, fill="x") 
+            
+            lbl_name = ctk.CTkLabel(frame, text=user_name, font=("Inter", 12, "bold"), fg_color="#333333", corner_radius=4)
+            lbl_name.pack(anchor="nw", padx=5, pady=5)
+            
+            lbl_vid = ctk.CTkLabel(frame, text="Cámara apagada", width=320, height=240, fg_color="black")
+            lbl_vid.pack(pady=5)
+            
+            self.camera_widgets[user_id] = {'frame': frame, 'label': lbl_vid}
+        
+        vid_label = self.camera_widgets[user_id]['label']
+        
+        if is_off:
+            vid_label.configure(image="", text="Cámara apagada")
+        elif ctk_image:
+            vid_label.configure(image=ctk_image, text="")
 
     def show_meeting_room(self, room_code):
         self._clear_container()
@@ -662,8 +749,20 @@ class App(ctk.CTk):
         self.video_panel = ctk.CTkFrame(layout, corner_radius=10, fg_color="#1e1e1e")
         self.video_panel.pack(side="left", fill="both", expand=True, padx=(0, 5))
         
-        lbl_video_placeholder = ctk.CTkLabel(self.video_panel, text="Cámara (se implementará en la fase 9)", font=("Inter", 14, "italic"), text_color="gray")
-        lbl_video_placeholder.pack(expand=True)
+        # Etiqueta para contar participantes
+        self.lbl_participants = ctk.CTkLabel(self.video_panel, text="Participantes en sala: 1", font=("Inter", 14, "bold"))
+        self.lbl_participants.pack(pady=(10, 5))
+        
+        # Un ScrollableFrame para albergar MÚLTIPLES cámaras dinámicamente
+        self.cameras_frame = ctk.CTkScrollableFrame(self.video_panel, fg_color="transparent")
+        self.cameras_frame.pack(fill="both", expand=True, padx=5, pady=5)
+        
+        self.camera_widgets = {} 
+        self.cam_running = False
+        self.users_cam_state = {} # NUEVO: Filtro para frames fantasmas
+        
+        self.btn_cam = ctk.CTkButton(self.video_panel, text="Activar Cámara", command=self.toggle_camera)
+        self.btn_cam.pack(pady=10)
         
         # Panel derecho (Chat y Archivos)
         chat_panel = ctk.CTkFrame(layout, width=300, corner_radius=10)
@@ -797,12 +896,60 @@ class App(ctk.CTk):
         self.chat_display.see(tk.END)
 
     def on_leave_meeting(self):
+        
+        self.cam_running = False
+        
         if self.client and self.client.connected:
             self.client.send_message({
                 'type': 'LEAVE_ROOM'
             })
         self.show_lobby_screen()
         self.geometry("600x550") # Resetear tamaño de ventana
+        
+    def toggle_camera(self):
+        if not self.cam_running:
+            self.cam_running = True
+            self.btn_cam.configure(text="Apagar Cámara", fg_color="#e74c3c", hover_color="#c0392b")
+            
+            # Avisar que encendí la cámara y guardar mi propio estado
+            self.client.send_message({'type': 'CAMERA_TOGGLE', 'state': True})
+            self.users_cam_state[self.user_session['id']] = True
+            
+            threading.Thread(target=self._camera_capture_loop, daemon=True).start()
+        else:
+            self.cam_running = False
+            self.btn_cam.configure(text="Activar Cámara", fg_color="#1f538d", hover_color="#14375e")
+            
+            # Avisar que apagué, guardar el estado y limpiar mi recuadro
+            self.client.send_message({'type': 'CAMERA_TOGGLE', 'state': False})
+            self.users_cam_state[self.user_session['id']] = False
+            self.update_camera_frame(self.user_session['id'], 'Tú', is_off=True)
+
+    def _camera_capture_loop(self):
+        cap = cv2.VideoCapture(0)
+        
+        while self.cam_running and self.client and self.client.connected:
+            ret, frame = cap.read()
+            if ret:
+                frame = cv2.resize(frame, (320, 240))
+                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), 50]
+                result, buffer = cv2.imencode('.jpg', frame_rgb, encode_param)
+                
+                if result and self.cam_running: 
+                    binary_data = buffer.tobytes()
+                    
+                    self.client.send_message({
+                        'type': 'CAMERA_FRAME',
+                        'userId': self.user_session['id'],
+                        'userName': self.user_session['nombres']
+                    }, binary_data)
+                    
+                    self.gui_queue.put(({'type': 'LOCAL_CAMERA_FRAME', 'userId': self.user_session['id'], 'userName': 'Tú'}, binary_data))
+            
+            time.sleep(0.1) 
+            
+        cap.release()
 
     def toggle_waiting_room_popup(self):
         if hasattr(self, 'popup_window') and self.popup_window.winfo_exists():

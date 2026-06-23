@@ -129,7 +129,7 @@ function obtenerMensajesPorSala(idSala) {
 }
 
 function obtenerSalasPorHost(idHost) {
-    const stmt = db.prepare(`SELECT CodigoSala, Nombre, Estado FROM Salas WHERE IdHost = ?`);
+    const stmt = db.prepare(`SELECT CodigoSala, Nombre, Estado FROM Salas WHERE IdHost = ? AND Estado != 'Eliminada'`);
     try {
         const rows = stmt.all(idHost);
         return { success: true, salas: rows };
@@ -174,6 +174,17 @@ function obtenerArchivoPorId(idArchivo) {
     }
 }
 
+function eliminarSala(codigoSala, idHost) {
+    // Borrado lógico: Cambiamos el estado para no romper las relaciones del chat
+    const stmt = db.prepare(`UPDATE Salas SET Estado = 'Eliminada' WHERE CodigoSala = ? AND IdHost = ?`);
+    try {
+        const res = stmt.run(codigoSala, idHost);
+        return { success: res.changes > 0 };
+    } catch (err) {
+        return { success: false, error: err.message };
+    }
+}
+
 module.exports = {
     hashPassword,
     verifyPassword,
@@ -187,6 +198,7 @@ module.exports = {
     obtenerSalasPorHost,
     guardarArchivoCompartido,
     obtenerArchivosPorSala,
-    obtenerArchivoPorId
+    obtenerArchivoPorId,
+    eliminarSala
 };
 

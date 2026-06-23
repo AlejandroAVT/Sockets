@@ -146,6 +146,15 @@ function handleMessage(socket, jsonMsg, binaryMsg) {
         case 'GET_MY_ROOMS':
             processGetMyRooms(socket);
             break;
+        case 'CAMERA_FRAME':
+            processCameraFrame(socket, jsonMsg, binaryMsg);
+            break;
+        case 'CAMERA_TOGGLE':
+            processCameraToggle(socket, jsonMsg);
+            break;
+        case 'DELETE_ROOM':
+            processDeleteRoom(socket, jsonMsg);
+            break;        
         default:
             console.warn(`Tipo de mensaje no admitido en esta fase: ${jsonMsg.type}`);
     }
@@ -220,19 +229,40 @@ function processCreateRoom(socket, jsonMsg) {
                 sendFramedMessage(socket, { type: 'CREATE_ROOM_RESPONSE', success: false, message: 'La sala ya está activa en otra sesión.' });
                 return;
             }
+
             activeRooms.set(codigoSala, new Set([socket]));
-            waitingRooms.set(codigoSala, []);
+            if (!waitingRooms.has(codigoSala)) {
+                waitingRooms.set(codigoSala, []);
+            }
             hostByRoom.set(codigoSala, socket);
             session.currentRoom = codigoSala;
+
+            const historyRes = db.obtenerMensajesPorSala(existing.sala.IdSala);
+            const chatHistory = historyRes.success ? historyRes.mensajes : [];
+            const filesRes = db.obtenerArchivosPorSala(existing.sala.IdSala);
+            const fileHistory = filesRes.success ? filesRes.archivos : [];
 
             sendFramedMessage(socket, { 
                 type: 'CREATE_ROOM_RESPONSE', 
                 success: true, 
-                message: 'Sala abierta con éxito.', 
+                message: 'Sala reabierta con éxito.', 
                 codigoSala: codigoSala, 
-                nombreSala: nombre 
+                nombreSala: nombre,
+                chatHistory: chatHistory, // Enviamos el chat
+                fileHistory: fileHistory  // Enviamos los archivos
             });
             console.log(`Sala existente ${codigoSala} reabierta por su host ${session.userName}`);
+            
+            // CORRECCIÓN: Avisar inmediatamente al host si ya había gente esperando
+            const pendingList = waitingRooms.get(codigoSala);
+            if (pendingList && pendingList.length > 0) {
+                sendFramedMessage(socket, {
+                    type: 'WAITING_ROOM_UPDATE',
+                    usuariosPendientes: pendingList.map(u => ({ id: u.userId, nombre: u.userName }))
+                });
+            }
+
+            broadcastParticipantsUpdate(codigoSala);
             return;
         } else {
             sendFramedMessage(socket, { type: 'CREATE_ROOM_RESPONSE', success: false, message: 'El código de sala ya existe y pertenece a otro usuario.' });
@@ -255,7 +285,9 @@ function processCreateRoom(socket, jsonMsg) {
             success: true, 
             message: 'Sala creada con éxito.', 
             codigoSala: codigoSala, 
-            nombreSala: nombre 
+            nombreSala: nombre,
+            chatHistory: [],
+            fileHistory: []
         });
         console.log(`Sala ${codigoSala} creada por ${session.userName}`);
     }
@@ -396,6 +428,8 @@ function processAdmitUser(socket, jsonMsg) {
             }
         }
         
+        broadcastParticipantsUpdate(codigoSala);
+
     } else {
          sendFramedMessage(targetSocket, { type: 'ADMIT_RESULT', success: false, message: "El anfitrión ha rechazado tu solicitud." });
     }
@@ -481,6 +515,7 @@ function processLeaveRoom(socket) {
                 }
             }
             roomSockets.delete(socket);
+            broadcastParticipantsUpdate(roomCode);
             console.log(`Invitado ${session.userName} salió de la sala ${roomCode}`);
         }
     }
@@ -624,6 +659,60 @@ function processFileDownloadRequest(socket, jsonMsg) {
     });
 }
 
+function processCameraFrame(socket, jsonMsg, binaryMsg) {
+    const session = socketSessions.get(socket);
+    if (!session || !session.userId || !session.currentRoom) return;
+
+    const roomCode = session.currentRoom;
+    const roomSockets = activeRooms.get(roomCode);
+
+    if (roomSockets && binaryMsg) {
+        const broadcastMsg = {
+            type: 'CAMERA_FRAME',
+            userId: session.userId,
+            userName: session.userName
+        };
+        
+        for (const clientSocket of roomSockets) {
+            // Reenviamos a todos en la sala EXCEPTO al que lo envió
+            if (clientSocket !== socket && !clientSocket.destroyed) {
+                sendFramedMessage(clientSocket, broadcastMsg, binaryMsg);
+            }
+        }
+    }
+}
+
+function broadcastParticipantsUpdate(roomCode) {
+    const roomSockets = activeRooms.get(roomCode);
+    if (!roomSockets) return;
+    
+    const participants = [];
+    for (const clientSocket of roomSockets) {
+        const session = socketSessions.get(clientSocket);
+        if (session) participants.push({ id: session.userId, nombre: session.userName });
+    }
+    
+    for (const clientSocket of roomSockets) {
+        if (!clientSocket.destroyed) {
+            sendFramedMessage(clientSocket, { type: 'PARTICIPANTS_UPDATE', users: participants });
+        }
+    }
+}
+
+function processCameraToggle(socket, jsonMsg) {
+    const session = socketSessions.get(socket);
+    if (!session || !session.currentRoom) return;
+    const roomSockets = activeRooms.get(session.currentRoom);
+    if (roomSockets) {
+        const msg = { type: 'CAMERA_TOGGLE', userId: session.userId, state: jsonMsg.state };
+        for (const clientSocket of roomSockets) {
+            if (clientSocket !== socket && !clientSocket.destroyed) {
+                sendFramedMessage(clientSocket, msg);
+            }
+        }
+    }
+}
+
 function handleDisconnect(socket) {
     const session = socketSessions.get(socket);
     if (!session) return;
@@ -698,6 +787,27 @@ function handleDisconnect(socket) {
     }
 
     socketSessions.delete(socket);
+}
+
+function processDeleteRoom(socket, jsonMsg) {
+    const session = socketSessions.get(socket);
+    if (!session || !session.userId) return;
+
+    const { codigoSala } = jsonMsg;
+
+    // Medida de seguridad: No dejar que eliminen una sala que está en curso
+    if (activeRooms.has(codigoSala)) {
+        sendFramedMessage(socket, { type: 'DELETE_ROOM_RESPONSE', success: false, message: 'No puedes eliminar una sala que está en curso. Ingrésala y ciérrala primero.' });
+        return;
+    }
+
+    const res = db.eliminarSala(codigoSala, session.userId);
+    if (res.success) {
+        sendFramedMessage(socket, { type: 'DELETE_ROOM_RESPONSE', success: true, codigoSala: codigoSala });
+        console.log(`El usuario ${session.userName} ha eliminado la sala ${codigoSala}`);
+    } else {
+        sendFramedMessage(socket, { type: 'DELETE_ROOM_RESPONSE', success: false, message: 'Error al eliminar o no tienes permisos.' });
+    }
 }
 
 server.on('error', (err) => {
