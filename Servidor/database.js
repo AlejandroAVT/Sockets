@@ -66,7 +66,7 @@ function createUser(nombres, correo, password) {
     const stmt = db.prepare('INSERT INTO Usuarios (Nombres, Correo, PasswordHash) VALUES (?, ?, ?)');
     try {
         const res = stmt.run(nombres, correo, hash);
-        return { success: true, userId: res.lastInsertRowid };
+        return { success: true, userId: Number(res.lastInsertRowid) };
     } catch (err) {
         return { success: false, error: err.message };
     }
@@ -76,7 +76,7 @@ function crearSala(codigoSala, nombre, idHost) {
     const stmt = db.prepare(`INSERT INTO Salas (CodigoSala, Nombre, IdHost, Estado) VALUES (?, ?, ?, 'Activa')`);
     try {
         const res = stmt.run(codigoSala, nombre, idHost);
-        return { success: true, idSala: res.lastInsertRowid }; 
+        return { success: true, idSala: Number(res.lastInsertRowid) }; 
     } catch (err) {
         return { success: false, error: err.message };
     }
@@ -96,7 +96,7 @@ function registrarSolicitud(idSala, idUsuario) {
     const stmt = db.prepare(`INSERT INTO SolicitudesSala (IdSala, IdUsuario, Estado) VALUES (?, ?, 'Pendiente')`);
     try {
         const res = stmt.run(idSala, idUsuario);
-        return { success: true, idSolicitud: res.lastInsertRowid };
+        return { success: true, idSolicitud: Number(res.lastInsertRowid) };
     } catch (err) {
         return { success: false, error: err.message };
     }
@@ -106,7 +106,7 @@ function guardarMensaje(idSala, idUsuario, contenido) {
     const stmt = db.prepare("INSERT INTO Mensajes (IdSala, IdUsuario, Contenido, FechaEnvio) VALUES (?, ?, ?, datetime('now', 'localtime'))");
     try {
         const res = stmt.run(idSala, idUsuario, contenido);
-        return { success: true, idMensaje: res.lastInsertRowid };
+        return { success: true, idMensaje: Number(res.lastInsertRowid) };
     } catch (err) {
         return { success: false, error: err.message };
     }
@@ -142,7 +142,7 @@ function guardarArchivoCompartido(idSala, idUsuario, nombreArchivo, rutaArchivo)
     const stmt = db.prepare('INSERT INTO ArchivosCompartidos (IdSala, IdUsuario, NombreArchivo, RutaArchivo) VALUES (?, ?, ?, ?)');
     try {
         const res = stmt.run(idSala, idUsuario, nombreArchivo, rutaArchivo);
-        return { success: true, idArchivo: res.lastInsertRowid };
+        return { success: true, idArchivo: Number(res.lastInsertRowid) };
     } catch (err) {
         return { success: false, error: err.message };
     }
