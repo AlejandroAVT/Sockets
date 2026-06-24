@@ -890,7 +890,17 @@ class App(ctk.CTk):
 
     def append_chat_message(self, sender, text, timestamp=""):
         self.chat_display.configure(state="normal")
-        time_str = timestamp.split('T')[-1][:5] if 'T' in timestamp else time.strftime('%H:%M')
+        
+        time_str = ""
+        if timestamp:
+            
+            if ' ' in timestamp:
+                time_str = timestamp.split(' ')[1][:5]
+            else:
+                time_str = time.strftime('%H:%M')
+        else:
+            time_str = time.strftime('%H:%M')
+            
         self.chat_display.insert(tk.END, f"[{time_str}] {sender}: {text}\n")
         self.chat_display.configure(state="disabled")
         self.chat_display.see(tk.END)

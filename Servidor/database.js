@@ -103,7 +103,7 @@ function registrarSolicitud(idSala, idUsuario) {
 }
 
 function guardarMensaje(idSala, idUsuario, contenido) {
-    const stmt = db.prepare('INSERT INTO Mensajes (IdSala, IdUsuario, Contenido) VALUES (?, ?, ?)');
+    const stmt = db.prepare("INSERT INTO Mensajes (IdSala, IdUsuario, Contenido, FechaEnvio) VALUES (?, ?, ?, datetime('now', 'localtime'))");
     try {
         const res = stmt.run(idSala, idUsuario, contenido);
         return { success: true, idMensaje: res.lastInsertRowid };
