@@ -140,6 +140,9 @@ function handleMessage(socket, jsonMsg, binaryMsg) {
         case 'FILE_DOWNLOAD_REQUEST':
             processFileDownloadRequest(socket, jsonMsg);
             break;
+        case 'KICK_USER':
+            processKickUser(socket, jsonMsg);
+            break;
         case 'CANCEL_JOIN_REQUEST':
             processCancelJoinRequest(socket);
             break;
@@ -686,16 +689,74 @@ function broadcastParticipantsUpdate(roomCode) {
     const roomSockets = activeRooms.get(roomCode);
     if (!roomSockets) return;
     
+    const hostSocket = hostByRoom.get(roomCode);
     const participants = [];
     for (const clientSocket of roomSockets) {
         const session = socketSessions.get(clientSocket);
-        if (session) participants.push({ id: session.userId, nombre: session.userName });
+        if (session && session.userId) {
+            participants.push({ 
+                id: session.userId, 
+                nombre: session.userName,
+                isHost: clientSocket === hostSocket
+            });
+        }
     }
     
     for (const clientSocket of roomSockets) {
         if (!clientSocket.destroyed) {
             sendFramedMessage(clientSocket, { type: 'PARTICIPANTS_UPDATE', users: participants });
         }
+    }
+}
+
+function processKickUser(socket, jsonMsg) {
+    const session = socketSessions.get(socket);
+    if (!session || !session.currentRoom) return;
+
+    const roomCode = session.currentRoom;
+    if (hostByRoom.get(roomCode) !== socket) {
+        return; // Only host can kick!
+    }
+
+    const { userIdToKick } = jsonMsg;
+    const roomSockets = activeRooms.get(roomCode);
+    if (!roomSockets) return;
+
+    let targetSocket = null;
+    for (const clientSocket of roomSockets) {
+        const clientSession = socketSessions.get(clientSocket);
+        if (clientSession && clientSession.userId === userIdToKick) {
+            targetSocket = clientSocket;
+            break;
+        }
+    }
+
+    if (targetSocket) {
+        const targetSession = socketSessions.get(targetSocket);
+        sendFramedMessage(targetSocket, {
+            type: 'KICKED',
+            message: 'Has sido expulsado de la reunión por el anfitrión.'
+        });
+
+        roomSockets.delete(targetSocket);
+        targetSession.currentRoom = null;
+
+        const systemMsg = {
+            type: 'CHAT_MESSAGE',
+            userId: 0,
+            userName: 'Sistema',
+            message: `${targetSession.userName} ha sido expulsado de la reunión.`,
+            sentAt: new Date().toISOString()
+        };
+
+        for (const clientSocket of roomSockets) {
+            if (!clientSocket.destroyed) {
+                sendFramedMessage(clientSocket, systemMsg);
+            }
+        }
+        
+        console.log(`Usuario ${targetSession.userName} expulsado de la sala ${roomCode} por el anfitrión.`);
+        broadcastParticipantsUpdate(roomCode);
     }
 }
 

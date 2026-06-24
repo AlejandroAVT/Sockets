@@ -5,6 +5,7 @@ import struct
 import queue
 import time
 import os
+import winsound
 import cv2
 from PIL import Image
 import io
@@ -415,7 +416,13 @@ class App(ctk.CTk):
                 self.show_lobby_screen()
 
         elif msg_type == 'CHAT_MESSAGE':
-            self.append_chat_message(json_msg['userName'], json_msg['message'], json_msg.get('sentAt', ''))
+            sender = json_msg['userName']
+            self.append_chat_message(sender, json_msg['message'], json_msg.get('sentAt', ''))
+            if sender != self.user_session['nombres'] and sender != 'Sistema':
+                try:
+                    winsound.PlaySound("SystemAsterisk", winsound.SND_ALIAS | winsound.SND_ASYNC)
+                except Exception as e:
+                    print(f"Error playing notification sound: {e}")
 
         elif msg_type == 'ROOM_CLOSED':
             messagebox.showinfo("Sala Cerrada", json_msg.get('message', 'La sala ha sido cerrada.'))
@@ -503,9 +510,15 @@ class App(ctk.CTk):
                 self.update_camera_frame(u_id, "", is_off=True)
                 
         elif msg_type == 'PARTICIPANTS_UPDATE':
-            users = json_msg.get('users', [])
+            self.active_participants = json_msg.get('users', [])
             if hasattr(self, 'lbl_participants') and self.lbl_participants.winfo_exists():
-                self.lbl_participants.configure(text=f"Participantes en sala: {len(users)}")
+                self.lbl_participants.configure(text=f"Participantes en sala: {len(self.active_participants)}")
+            self.refresh_participants_popup_list()
+
+        elif msg_type == 'KICKED':
+            messagebox.showwarning("Expulsado", json_msg.get('message', 'Has sido expulsado de la reunión.'))
+            self.show_lobby_screen()
+            self.geometry("600x550")
         
         elif msg_type == 'DELETE_ROOM_RESPONSE':
             if json_msg['success']:
@@ -727,6 +740,9 @@ class App(ctk.CTk):
         self._clear_container()
         self.geometry("900x600") # Aumentar tamaño para el chat
         
+        self.active_participants = []
+        self.mic_muted = False
+        
         # Header
         header = ctk.CTkFrame(self.main_container, height=50, corner_radius=6)
         header.pack(fill="x", pady=(0, 5))
@@ -735,6 +751,9 @@ class App(ctk.CTk):
         
         btn_leave = ctk.CTkButton(header, text="Salir", width=80, fg_color="#e74c3c", hover_color="#c0392b", command=self.on_leave_meeting)
         btn_leave.pack(side="right", padx=15, pady=10)
+        
+        btn_participants = ctk.CTkButton(header, text="Participantes", width=110, fg_color="#16a085", hover_color="#117a65", command=self.toggle_participants_popup)
+        btn_participants.pack(side="right", padx=15, pady=10)
         
         if self.is_host:
             self.btn_waiting = ctk.CTkButton(header, text="Sala de Espera (0)", width=130, fg_color="#16a085", hover_color="#117a65", command=self.toggle_waiting_room_popup)
@@ -761,8 +780,15 @@ class App(ctk.CTk):
         self.cam_running = False
         self.users_cam_state = {} # NUEVO: Filtro para frames fantasmas
         
-        self.btn_cam = ctk.CTkButton(self.video_panel, text="Activar Cámara", command=self.toggle_camera)
-        self.btn_cam.pack(pady=10)
+        # Controls Bar at the bottom of video panel
+        controls_frame = ctk.CTkFrame(self.video_panel, fg_color="transparent")
+        controls_frame.pack(side="bottom", fill="x", pady=10)
+        
+        self.btn_mic = ctk.CTkButton(controls_frame, text="Silenciar Micrófono", command=self.toggle_mic, fg_color="#1f538d", hover_color="#14375e")
+        self.btn_mic.pack(side="left", expand=True, padx=5)
+        
+        self.btn_cam = ctk.CTkButton(controls_frame, text="Activar Cámara", command=self.toggle_camera, fg_color="#1f538d", hover_color="#14375e")
+        self.btn_cam.pack(side="right", expand=True, padx=5)
         
         # Panel derecho (Chat y Archivos)
         chat_panel = ctk.CTkFrame(layout, width=300, corner_radius=10)
@@ -919,7 +945,7 @@ class App(ctk.CTk):
     def toggle_camera(self):
         if not self.cam_running:
             self.cam_running = True
-            self.btn_cam.configure(text="Apagar Cámara", fg_color="#e74c3c", hover_color="#c0392b")
+            self.btn_cam.configure(text="Detener Cámara", fg_color="#e74c3c", hover_color="#c0392b")
             
             # Avisar que encendí la cámara y guardar mi propio estado
             self.client.send_message({'type': 'CAMERA_TOGGLE', 'state': True})
@@ -1017,6 +1043,69 @@ class App(ctk.CTk):
             self.refresh_popup_list()
             if hasattr(self, 'btn_waiting') and self.btn_waiting.winfo_exists():
                 self.btn_waiting.configure(text=f"Sala de Espera ({len(self.pending_users)})")    
+
+    def toggle_participants_popup(self):
+        if hasattr(self, 'participants_popup') and self.participants_popup.winfo_exists():
+            self.participants_popup.lift()
+            return
+            
+        self.participants_popup = ctk.CTkToplevel(self)
+        self.participants_popup.title("Participantes")
+        self.participants_popup.geometry("400x300")
+        self.participants_popup.transient(self)
+        
+        lbl = ctk.CTkLabel(self.participants_popup, text="Participantes de la Reunión", font=("Inter", 16, "bold"))
+        lbl.pack(pady=10)
+        
+        self.participants_scroll = ctk.CTkScrollableFrame(self.participants_popup)
+        self.participants_scroll.pack(fill="both", expand=True, padx=10, pady=10)
+        
+        self.refresh_participants_popup_list()
+
+    def refresh_participants_popup_list(self):
+        if not hasattr(self, 'participants_scroll') or not self.participants_scroll.winfo_exists():
+            return
+            
+        for w in self.participants_scroll.winfo_children():
+            w.destroy()
+            
+        participants = getattr(self, 'active_participants', [])
+        if not participants:
+            ctk.CTkLabel(self.participants_scroll, text="No hay participantes en la sala.").pack(pady=20)
+            return
+            
+        for user in participants:
+            frame = ctk.CTkFrame(self.participants_scroll)
+            frame.pack(fill="x", pady=5)
+            
+            name_text = user['nombre']
+            if user.get('isHost'):
+                name_text += " (Anfitrión)"
+            elif user['id'] == self.user_session['id']:
+                name_text += " (Tú)"
+                
+            ctk.CTkLabel(frame, text=name_text).pack(side="left", padx=10)
+            
+            # Si soy el anfitrión y el participante no es el anfitrión ni yo mismo
+            if self.is_host and not user.get('isHost') and user['id'] != self.user_session['id']:
+                btn_kick = ctk.CTkButton(frame, text="Expulsar", width=70, fg_color="#e74c3c", hover_color="#c0392b",
+                                         command=lambda u=user['id']: self.on_kick_user(u))
+                btn_kick.pack(side="right", padx=5)
+
+    def on_kick_user(self, user_id):
+        if messagebox.askyesno("Confirmar", "¿Estás seguro que deseas expulsar a este participante?"):
+            self.client.send_message({
+                'type': 'KICK_USER',
+                'userIdToKick': user_id
+            })
+
+    def toggle_mic(self):
+        if not self.mic_muted:
+            self.mic_muted = True
+            self.btn_mic.configure(text="Activar Micrófono", fg_color="#e74c3c", hover_color="#c0392b")
+        else:
+            self.mic_muted = False
+            self.btn_mic.configure(text="Silenciar Micrófono", fg_color="#1f538d", hover_color="#14375e")
 
 if __name__ == "__main__":
     app = App()
