@@ -12,13 +12,15 @@ from network_client import SocketsZoomClient
 from ui_login import UILogin
 from ui_lobby import UILobby
 from ui_meeting import UIMeeting
+from video_controller import VideoControllerMixin
+from file_manager import FileManagerMixin
 
 DEFAULT_PORT = 8080
 ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("blue")
 
 # Herencia Múltiple: App absorbe todas las funciones de UI sin modificarlas
-class App(ctk.CTk, UILogin, UILobby, UIMeeting):
+class App(ctk.CTk, UILogin, UILobby, UIMeeting,VideoControllerMixin, FileManagerMixin):
     def __init__(self):
         super().__init__()
         self.title("Prototipo Videoconferencia")

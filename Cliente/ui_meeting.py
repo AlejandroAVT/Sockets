@@ -29,23 +29,6 @@ class UIMeeting:
         except Exception as e:
             return None
 
-    def update_camera_frame(self, user_id, user_name, ctk_image=None, is_off=False):
-        if not hasattr(self, 'cameras_frame') or not self.cameras_frame.winfo_exists(): return
-        if user_id not in self.camera_widgets: self.rebuild_grid()
-        if user_id not in self.camera_widgets: return
-            
-        vid_label = self.camera_widgets[user_id]['label']
-        avatar = self.camera_widgets[user_id]['avatar']
-        badge_frame = self.camera_widgets[user_id]['badge'].master
-        
-        if is_off:
-            vid_label.place_forget()
-            avatar.place(relx=0.5, rely=0.5, anchor=tk.CENTER)
-        elif ctk_image:
-            vid_label.configure(image=ctk_image)
-            vid_label.place(relx=0.5, rely=0.5, relwidth=1, relheight=1, anchor=tk.CENTER)
-            avatar.place_forget(); badge_frame.lift()
-
     def rebuild_grid(self):
         active_ids = {u['id'] for u in self.active_participants}
         my_id = self.user_session['id']
@@ -217,43 +200,6 @@ class UIMeeting:
         self.chat_entry.delete(0, tk.END)
         self.client.send_message({'type': 'CHAT_MESSAGE', 'message': text})
 
-    def on_share_file_click(self):
-        file_path = filedialog.askopenfilename(title="Seleccionar archivo para compartir")
-        if not file_path: return
-        threading.Thread(target=self.bg_upload_file, args=(file_path, os.path.basename(file_path), os.path.getsize(file_path)), daemon=True).start()
-
-    def bg_upload_file(self, file_path, file_name, file_size):
-        try:
-            self.gui_queue.put(({'type': 'UPLOAD_PROGRESS', 'fileName': file_name, 'progress': 0}, None))
-            chunk_size = 4 * 1024 
-            total_chunks = (file_size + chunk_size - 1) // chunk_size if file_size > 0 else 1
-            with open(file_path, 'rb') as f:
-                for chunk_idx in range(total_chunks):
-                    if not self.client or not self.client.connected: break
-                    data = f.read(chunk_size)
-                    self.client.send_message({
-                        'type': 'FILE_CHUNK', 'fileName': file_name, 'chunkIndex': chunk_idx, 'totalChunks': total_chunks, 'isLast': chunk_idx == total_chunks - 1
-                    }, binary_data=data)
-                    self.gui_queue.put(({'type': 'UPLOAD_PROGRESS', 'fileName': file_name, 'progress': int(((chunk_idx + 1) / total_chunks) * 100)}, None))
-                    time.sleep(0.01)
-        except Exception as e:
-            self.gui_queue.put(({'type': 'UPLOAD_ERROR', 'fileName': file_name, 'error': str(e)}, None))
-
-    def add_file_to_list(self, file_id, file_name, sender_name):
-        if not hasattr(self, 'files_frame') or not self.files_frame.winfo_exists(): return
-        row = ctk.CTkFrame(self.files_frame, fg_color="#222222")
-        row.pack(fill="x", pady=2, padx=5)
-        ctk.CTkButton(row, text="Descargar", width=70, height=22, font=("Inter", 10), command=lambda f_id=file_id, f_name=file_name: self.on_download_file_click(f_id, f_name)).pack(side="left", padx=5, pady=4)
-        ctk.CTkLabel(row, text=f"{file_name} ( {sender_name} )", font=("Inter", 11), anchor="w").pack(side="left", padx=8, pady=4)
-
-    def on_download_file_click(self, file_id, file_name):
-        file_path = filedialog.asksaveasfilename(title="Guardar archivo", initialfile=file_name, defaultextension=os.path.splitext(file_name)[1])
-        if not file_path: return
-        if not hasattr(self, 'active_downloads'): self.active_downloads = {}
-        file_id_key = int(file_id)
-        self.active_downloads[file_id_key] = {'filePath': file_path, 'fileName': file_name, 'expectedChunk': 0, 'fileObj': open(file_path, 'wb')}
-        self.client.send_message({'type': 'FILE_DOWNLOAD_REQUEST', 'fileId': file_id_key})
-
     def append_chat_message(self, sender, text, timestamp=""):
         self.chat_display.configure(state="normal")
         time_str = timestamp.split(' ')[1][:5] if timestamp and ' ' in timestamp else time.strftime('%H:%M')
@@ -271,35 +217,6 @@ class UIMeeting:
             self.btn_mic.configure(text="" if self.img_mic_off else "❌\n🎙️", image=self.img_mic_off, fg_color="#e74c3c", hover_color="#c0392b")
         else:
             self.btn_mic.configure(text="" if self.img_mic_on else "🎙️", image=self.img_mic_on, fg_color="#2b2b30", hover_color="#3a3a40")
-
-    def toggle_camera(self):
-        self.cam_running = not self.cam_running
-        if self.cam_running:
-            self.btn_cam.configure(text="" if self.img_cam_on else "📹", image=self.img_cam_on, fg_color="#2b2b30", hover_color="#3a3a40")
-            self.client.send_message({'type': 'CAMERA_TOGGLE', 'state': True})
-            self.users_cam_state[self.user_session['id']] = True
-            threading.Thread(target=self._camera_capture_loop, daemon=True).start()
-        else:
-            self.btn_cam.configure(text="" if self.img_cam_off else "❌\n📹", image=self.img_cam_off, fg_color="#e74c3c", hover_color="#c0392b")
-            self.client.send_message({'type': 'CAMERA_TOGGLE', 'state': False})
-            self.users_cam_state[self.user_session['id']] = False
-            self.update_camera_frame(self.user_session['id'], 'Tú', is_off=True)
-
-    def _camera_capture_loop(self):
-        cap = cv2.VideoCapture(0)
-        while self.cam_running and self.client and self.client.connected:
-            ret, frame = cap.read()
-            if ret:
-                # -- ARREGLO DE CALIDAD DE VIDEO --
-                frame = cv2.resize(frame, (640, 480))
-                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                result, buffer = cv2.imencode('.jpg', frame_rgb, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
-                if result and self.cam_running:
-                    binary_data = buffer.tobytes()
-                    self.client.send_message({'type': 'CAMERA_FRAME', 'userId': self.user_session['id'], 'userName': self.user_session['nombres']}, binary_data)
-                    self.gui_queue.put(({'type': 'LOCAL_CAMERA_FRAME', 'userId': self.user_session['id'], 'userName': 'Tú'}, binary_data))
-            time.sleep(0.1)
-        cap.release()
 
     def refresh_popup_list(self):
         pending = getattr(self, 'pending_users', [])
