@@ -2,7 +2,7 @@ import tkinter as tk
 from tkinter import messagebox
 import customtkinter as ctk
 import threading
-from network_client import SocketsZoomClient
+from Logic.network_client import SocketsZoomClient
 
 DEFAULT_HOST, DEFAULT_PORT = 'localhost', 8080
 BG_WINDOW, BG_CARD, BORDER_CARD = "#0c0d0f", "#16181c", "#23272d"

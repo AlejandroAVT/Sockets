@@ -7,13 +7,15 @@ import tkinter as tk
 from tkinter import messagebox
 import customtkinter as ctk
 
-# Importación de la Red y las Vistas
-from network_client import SocketsZoomClient
-from ui_login import UILogin
-from ui_lobby import UILobby
-from ui_meeting import UIMeeting
-from video_controller import VideoControllerMixin
-from file_manager import FileManagerMixin
+# Importación de las Vistas (Carpeta Interfaz)
+from UI.ui_login import UILogin
+from UI.ui_lobby import UILobby
+from UI.ui_meeting import UIMeeting
+
+# Importación de la Red y Controladores (Carpeta Logica)
+from Logic.network_client import SocketsZoomClient
+from Logic.video_controller import VideoControllerMixin
+from Logic.file_manager import FileManagerMixin
 
 DEFAULT_PORT = 8080
 ctk.set_appearance_mode("Dark")
