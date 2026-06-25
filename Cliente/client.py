@@ -360,7 +360,9 @@ class App(ctk.CTk):
                 if not self.users_cam_state.get(u_id, True): return
                 try:
                     image = Image.open(io.BytesIO(bin_data))
-                    self.update_camera_frame(u_id, json_msg.get('userName', 'Desconocido'), ctk_image=ctk.CTkImage(light_image=image, dark_image=image, size=(320, 240)))
+                    # AUMENTAR TAMAÑO DE RENDERIZADO AQUÍ
+                    ctk_img = ctk.CTkImage(light_image=image, dark_image=image, size=(480, 360))
+                    self.update_camera_frame(u_id, json_msg.get('userName', 'Desconocido'), ctk_image=ctk_img)
                 except: pass
         elif msg_type == 'CAMERA_TOGGLE':
             u_id, state = json_msg.get('userId'), json_msg.get('state')
@@ -549,6 +551,12 @@ class App(ctk.CTk):
         elif num_participants <= 4: cols, rows = 2, 2
         else: cols, rows = 3, (num_participants + 2) // 3
 
+        # 1. Limpiar los pesos anteriores para matar espacios fantasma
+        for i in range(10): 
+            self.cameras_frame.rowconfigure(i, weight=0)
+            self.cameras_frame.columnconfigure(i, weight=0)
+
+        # 2. Aplicar los nuevos pesos de la grilla
         for i in range(rows): self.cameras_frame.rowconfigure(i, weight=1)
         for j in range(cols): self.cameras_frame.columnconfigure(j, weight=1)
 
@@ -780,9 +788,12 @@ class App(ctk.CTk):
         while self.cam_running and self.client and self.client.connected:
             ret, frame = cap.read()
             if ret:
-                frame = cv2.resize(frame, (320, 240))
+                # Aumentar resolución (640x480)
+                frame = cv2.resize(frame, (640, 480))
                 frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                result, buffer = cv2.imencode('.jpg', frame_rgb, [int(cv2.IMWRITE_JPEG_QUALITY), 50])
+                
+                # Subir calidad de JPG del 50% al 80%
+                result, buffer = cv2.imencode('.jpg', frame_rgb, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
                 if result and self.cam_running:
                     binary_data = buffer.tobytes()
                     self.client.send_message({'type': 'CAMERA_FRAME', 'userId': self.user_session['id'], 'userName': self.user_session['nombres']}, binary_data)
