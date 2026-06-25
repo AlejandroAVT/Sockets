@@ -108,7 +108,7 @@ class App(ctk.CTk):
     # Ventana principal, controla vistas y cola de GUI
     def __init__(self):
         super().__init__()
-        self.title("Prototipo")
+        self.title("El Prototipo")
         self.geometry("600x550")
         self.minsize(500, 450)
         self.client, self.user_session = None, None
@@ -147,7 +147,7 @@ class App(ctk.CTk):
         card = ctk.CTkFrame(self.main_container, width=380, height=440, corner_radius=15, fg_color=BG_CARD, border_color=BORDER_CARD, border_width=1)
         card.place(relx=0.5, rely=0.5, anchor=tk.CENTER)
         ctk.CTkFrame(card, height=4, fg_color=COLOR_ACCENT, corner_radius=0).place(relx=0, rely=0, relwidth=1)
-        ctk.CTkLabel(card, text="Miniminizoom", font=("Inter", 24, "bold"), text_color=COLOR_TEXT).pack(pady=(40, 5))
+        ctk.CTkLabel(card, text="MiniMiniMeet", font=("Inter", 24, "bold"), text_color=COLOR_TEXT).pack(pady=(40, 5))
         
         self.email_entry = ctk.CTkEntry(card, width=280, height=40, corner_radius=8, fg_color=BG_ENTRY, border_color=BORDER_CARD, placeholder_text="Correo Electrónico")
         self.email_entry.pack(pady=10)
