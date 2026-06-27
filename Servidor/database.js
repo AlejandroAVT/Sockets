@@ -1,3 +1,4 @@
+// Patrón Facade (Fachada): database.js unifica y simplifica el acceso a SQLite para el resto de la aplicación
 const { DatabaseSync } = require('node:sqlite');
 const path = require('path'), fs = require('fs'), crypto = require('crypto');
 
@@ -8,6 +9,9 @@ const schemaPath = path.join(__dirname, '../BaseDatos/schema.sql'), seedPath = p
 // Crear el directorio de la base de datos si no existe e inicializar SQLite
 const dbDir = path.dirname(dbPath);
 if (!fs.existsSync(dbDir)) fs.mkdirSync(dbDir, { recursive: true });
+
+// Patrón Singleton (a nivel de módulo): Node.js almacena en caché las importaciones de este archivo,
+// garantizando que todos los controladores compartan exactamente esta misma instancia de conexión a la base de datos.
 const db = new DatabaseSync(dbPath);
 
 // Inicializa base de datos con esquema y datos de prueba si la tabla Usuarios no existe

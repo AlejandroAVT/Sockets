@@ -3,8 +3,9 @@ import threading
 import json
 import struct
 
+# Patrón Adapter (Adaptador): Adapta el flujo continuo de bytes TCP de sockets a tramas estructuradas (JSON + Binario)
 class SocketsZoomClient:
-    # Conexión TCP con el servidor usando protocolo de enmarcado (header 8 bytes)
+    # Patrón Observer / Callback: Recibe funciones callback para notificar de forma desacoplada los eventos de red a la interfaz gráfica
     def __init__(self, host, port, on_message_callback, on_disconnect_callback):
         self.host, self.port = host, port
         self.on_message_callback, self.on_disconnect_callback = on_message_callback, on_disconnect_callback

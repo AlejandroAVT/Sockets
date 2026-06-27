@@ -38,6 +38,7 @@ const server = net.createServer((socket) => {
 
     let buffer = Buffer.alloc(0); // Acumulador de fragmentos TCP
 
+    // Patrón Adapter (Adaptador): Convierte / acumula fragmentos TCP de bytes crudos a tramas estructuradas
     socket.on('data', (chunk) => {
         buffer = Buffer.concat([buffer, chunk]);
         console.log(`Recibidos ${chunk.length} bytes de ${clientAddress}`);
@@ -87,7 +88,8 @@ function sendFramedMessage(targetSocket, jsonObject, binaryBuffer = null) {
     } catch (err) { console.error("Error al enviar trama:", err.message); }
 }
 
-// Enrutador Delegado
+// Patrón Mediator (Mediador): Esta función y switch centralizan y enrutan todas las peticiones
+// entrantes a los controladores correspondientes sin acoplar directamente el servidor con la lógica de negocio
 function handleMessage(socket, jsonMsg, binaryMsg) {
     const session = socketSessions.get(socket), clientAddress = `${socket.remoteAddress}:${socket.remotePort}`;
     console.log(`Mensaje recibido (${jsonMsg.type}) de ${session.userName || clientAddress}`);

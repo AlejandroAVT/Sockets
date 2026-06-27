@@ -21,7 +21,8 @@ DEFAULT_PORT = 8080
 ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("blue")
 
-# Herencia Múltiple: App absorbe todas las funciones de UI sin modificarlas
+# Patrón Mixin (Herencia Múltiple): App compone vistas y controladores lógicos independientes
+# Patrón Mediator (Mediador): Esta clase App centraliza y coordina la comunicación entre las vistas (UI) y la lógica de red/controladores
 class App(ctk.CTk, UILogin, UILobby, UIMeeting,VideoControllerMixin, FileManagerMixin):
     def __init__(self):
         super().__init__()
@@ -29,8 +30,11 @@ class App(ctk.CTk, UILogin, UILobby, UIMeeting,VideoControllerMixin, FileManager
         self.geometry("600x550")
         self.minsize(500, 450)
         self.client, self.user_session = None, None
+        
+        # Patrón Event Queue (Cola de Mensajes): Permite transferir eventos de forma hilo-seguro desde el hilo de red al hilo principal de la interfaz gráfica
         self.gui_queue = queue.Queue()
         self.after(50, self._process_queue)
+        
         self.main_container = ctk.CTkFrame(self, fg_color="transparent")
         self.main_container.pack(fill="both", expand=True, padx=15, pady=15)
         self.show_login_screen()
